@@ -1,0 +1,9 @@
+$rem
+  exchange b3lyp
+  basis 6-31g*
+  ithrsh 10
+  xc_grid 000100000302
+  jobtyp sp
+  symmetry 0
+  sym_ignore 1
+$end

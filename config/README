@@ -1,0 +1,5 @@
+This directory contains APE's configuration files that need to be modified
+specifically for your computer. The file "template.conf" provides a sample
+configuration file.
+
+Rename your individual configuration file "ape.conf".

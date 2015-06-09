@@ -1,0 +1,592 @@
+#!/usr/bin/env python
+
+# Accelerated Piezo Evaluator (APE) returns the piezo-coefficient (d33) starting
+# from an XYZ input.
+
+### Imports
+import sys, math
+import numpy as np
+from collections import defaultdict
+import copy
+import matplotlib.pyplot as plt
+from subprocess import check_call
+from scipy.optimize import curve_fit
+from scipy.optimize import minimize
+
+usage="  Usage:   ape  xyz-file  qchem_template nstep zshift restart"
+
+### Exit conditions if input != usage
+if len(sys.argv) != 5 and len(sys.argv) != 6 :
+    print usage
+    sys.exit(1)
+
+### Read in XYZ file and Qchem file  
+
+#### List of XYZ coords plus Atom Symbol & Qchem input list 
+XYZ = [] 
+qchemtemplate = []
+fxyz = sys.argv[1]
+fqchem = sys.argv[2]
+nstep = int(sys.argv[3])
+zshift = float(sys.argv[4])
+restart = False
+
+
+if len(sys.argv) == 6 and sys.argv[5] == "restart":
+    restart = True
+    
+
+### Qchem File
+f = open(fqchem, "r")
+qchemtemplate = f.readlines()
+f.close()
+
+### XYZ File
+f = open(fxyz, "r")
+
+Natom = int(f.readline())
+print "Natom = ", Natom
+Comment = f.readline()
+
+for line in f:
+    tmp = line.split()
+    XYZ.append(tmp[0]) # atom symbol
+    XYZ.append(float(tmp[1])) # x
+    XYZ.append(float(tmp[2])) # y
+    XYZ.append(float(tmp[3])) # z
+f.close()
+
+### Reordering XYZ file based on adjacency 
+
+def qchemsort(XYZ):
+    """Generates a Qchem input file for the XYZ list """
+    f = open("qchemsortXYZ", "w")
+    f.write("$molecule \n")
+    f.write("0 1 \n")
+    for i in range(Natom):
+        f.write("%s  %.6f  %.6f %.6f \n" % (XYZ[4*i], XYZ[4*i+1], XYZ[4*i+2], XYZ[4*i+3]))
+    f.write("$end \n")
+    f.write("$rem \n")
+    f.write("jobtype sp \n")
+    f.write("exchange hf \n")
+    f.write("basis sto-3g \n")
+    f.write("skip_scfman 1 \n")
+    f.write("bcsr_geometry_reorder 1 \n")
+    f.write("$end \n")
+    f.close()
+
+def runqchemsort():
+    """Runs qchem on XYZ file to sort by adjacency """
+    qchem = "/home/dlambrecht/meb168/ape/runqchem.sh"
+    input = "qchemsortXYZ"
+    output = "qchemsortXYZ.out"
+    args = input + " " + output
+    print qchem, args
+    check_call([qchem,args])
+
+def getsortedXYZ():
+    """Gets the sorted XYZ list from the qchem output file """
+    XYZsort = []
+    f = open("qchemsortXYZ.out", "r")
+    for i, line in enumerate(f):
+        if "Standard Nuclear Orientation (Angstroms)" in line:
+            line = f.next()
+            line = f.next()
+            line = f.next()
+            for i in range(Natom):
+                tmp = line.split()
+                XYZsort.append(tmp[1])
+                XYZsort.append(float(tmp[2]))
+                XYZsort.append(float(tmp[3]))
+                XYZsort.append(float(tmp[4]))
+                line = f.next()
+    f.close()
+    return XYZsort
+
+## Running qchem sort
+#qchemsort(XYZ)
+#runqchemsort()
+#XYZ = getsortedXYZ()
+
+
+### Uncommenting XYZ while using "../ape test2_align.xyz dfttemplate 3 0.05 restart" input changes d33 from -20 to 
+### -2.3 e -14 
+### Check from "Reordering XYZ file based on adjacency" to here
+
+
+### Identifying Hydrogen-bonded Atom pair
+
+### H bond radius constraints
+r_min = 1.3
+r_max = 2.5
+
+### Initialising 
+
+idx1 = -1
+idx2 = -1
+hvec = np.array([0,0,0], 'd') # H bond vector/axis 
+bmat = np.zeros(shape=(Natom,Natom)) # Bond matrix 
+covmat = np.zeros(shape=(Natom,Natom),dtype = np.int) #Covalent
+
+### Covalent bond tolerance 
+mintol = .5    
+maxtol = 1.2
+
+### Covalent radii of atoms
+rcovtable = {"H": 0.37, "C": 0.77, "N": 0.75, "O": 0.73}
+
+### Finding Bond matrix
+
+for i in range(Natom):
+    sym1 = XYZ[4*i]
+   # if sym1 != "H": 
+   #     continue
+	
+    ri = rcovtable[sym1]	
+    x1 = XYZ[4*i+1]
+    y1 = XYZ[4*i+2]
+    z1 = XYZ[4*i+3]
+
+    for j in range(Natom):
+        
+        sym2 = XYZ[4*j]
+	rj = rcovtable[sym2]
+        x2 = XYZ[4*j+1]
+        y2 = XYZ[4*j+2]
+        z2 = XYZ[4*j+3]
+
+        r2 = (x1-x2)**2 + (y1-y2)**2 + (z1-z2)**2
+        r = math.sqrt(r2)
+	bmat[(i,j)] = r
+ 
+#        if r >= r_min and r <= r_max:
+#           idx1 = i
+#            idx2 = j
+#            hvec[0] = x1 - x2
+#            hvec[1] = y1 - y2
+#            hvec[2] = z1 - z2
+
+### Bond Matrix
+	
+	rcov = ri + rj
+	# print("i = %d, j = %d    r = %.3f  rcov = %.3f" % (i, j, r, rcov))
+	if (r >= mintol * rcov and r <= maxtol * rcov) or i == j: 
+		covmat[(i,j)] = 1
+
+### Printing bondmatrix, covmat
+print covmat
+
+### Making an empty dictionary
+
+def initializeML():
+    """Making an empty dictionary """
+    return dict([(x, 0) for x in range(Natom)])
+
+### Monomer List building functions
+
+def boundto(i):
+    """Finds bonded atoms"""
+    boundtolist = []
+    for k in range(Natom):
+        if covmat[i,k] == 1:
+	    boundtolist.append(k)
+    return boundtolist
+
+def addatom(i, in_monomer):
+	"""Adds atoms to dictionary based on which monomer they're in"""
+	if in_monomer[i] == 1:
+		return
+	in_monomer[i] = 1
+	for j in boundto(i):
+		addatom(j, in_monomer)
+
+### Defining ML, monomer list
+
+ML = []
+for i in range(Natom):
+	tmp = initializeML()
+	addatom(i, tmp)
+	
+	if not tmp in ML:
+		ML.append(tmp)
+
+### Number of atoms in each monomer
+
+Natom_mon1 = sum(ML[0].values())
+Natom_mon2 = sum(ML[1].values())
+    
+### Exit conditions for not having 2 monomers   
+
+if len(ML) > 2:
+    print "Expected 2 monomers, found", len(ML)
+    sys.exit(1)
+
+### Finding h bond pair (correct)
+
+def findHbondpair():
+    """ Finding the Hydrogen bond pair"""
+    r_min = 10**12
+    idx1 = -1
+    idx2 = -1
+    for i in range(Natom_mon1):
+        xi = XYZ[(4*i)+1]
+        yi = XYZ[(4*i)+2]
+        zi = XYZ[(4*i)+3]
+        for j in range(Natom_mon2):
+            xj = XYZ[(4*(j+Natom_mon1))+1]
+            yj = XYZ[(4*(j+Natom_mon1))+2]
+            zj = XYZ[(4*(j+Natom_mon1))+3]
+            r = math.sqrt((xi - xj)**2 + (yi - yj)**2 + (zi -zj)**2)
+            if r < r_min:
+                idx1 = i
+                idx2 = j + Natom_mon1
+                r_min = r
+                hvec[0] = xi - xj
+       	       	hvec[1]	= yi - yj
+       	       	hvec[2]	= zi - zj
+    return (idx1, idx2, hvec)
+
+idx1, idx2, hvec = findHbondpair()
+
+### Exit conditions for no Hydrogen bonds
+if idx1 < 0 or idx2 < 0:
+    print "No hydrogen bonds found!"
+    sys.exit(1)
+
+### Hydrogen bond information output
+
+print "Hydrogen-bonded pair: ", idx1, idx2
+print "H-bond axis:"
+print hvec
+
+#### Rotating the system to align z axis with the H bond axis 
+
+### Put origin at midpoint of hydrogen bond
+
+mid_x = .5 * (XYZ[(idx1*4)+1] + XYZ[(idx2*4)+1])
+mid_y = .5 * (XYZ[(idx1*4)+2] + XYZ[(idx2*4)+2])
+mid_z = .5 * (XYZ[(idx1*4)+3] + XYZ[(idx2*4)+3])
+XYZ_origin_hbond_midpoint = []
+for i in range(Natom):
+    XYZ_origin_hbond_midpoint.append(XYZ[i*4])
+    XYZ_origin_hbond_midpoint.append((XYZ[(i*4)+1]) - mid_x)
+    XYZ_origin_hbond_midpoint.append((XYZ[(i*4)+2]) - mid_y)
+    XYZ_origin_hbond_midpoint.append((XYZ[(i*4)+3]) - mid_z)
+
+### Finding rotation Matrix 
+
+def rotationTranslation(xyzArray, index1, index2):
+	"""
+	    a function for rotating and translating a molecule so that a given line
+	    segment between two atoms lies on the z axix
+        """
+	zVec = np.array([0, 0, 1.0])
+	yVec = np.array([0, 1.0, 0])
+	transVec = xyzArray[index1]
+	xyzArray = xyzArray - transVec
+	vec = xyzArray[index2]
+	vecXy = np.array([vec[0],vec[1], 0.0])
+	vecYz = np.array([0.0 ,np.linalg.norm(vecXy), vec[2]])
+
+	if np.linalg.norm(vecXy)==0.0:
+	    return xyzArray
+
+	vecYzNorm = vecYz * 1.0/(np.linalg.norm(vecYz))
+	vecXyNorm = vecXy* 1.0/(np.linalg.norm(vecXy))
+
+	theta1 = np.arccos(np.dot(vecXyNorm, yVec))
+	theta2 = np.arccos(np.dot(vecYzNorm, zVec))
+
+	cross1 = np.cross(vecXyNorm, yVec)
+	cross2 = np.cross(vecYzNorm, zVec)
+	if cross1[2] < 0:
+		theta1 = 2*np.pi -theta1
+	if cross2[0] < 0:
+		theta2 = 2 *np.pi -theta2
+
+	rotationMatrix =np.array([[np.cos(theta1), -np.sin(theta1), 0.0],
+	[np.cos(theta2)*np.sin(theta1), np.cos(theta2)* np.cos(theta1), -np.sin(theta2)],
+	[np.sin(theta2)*np.sin(theta1), np.sin(theta2)* np.cos(theta1), np.cos(theta2)]])
+	for i in range(xyzArray.shape[0]):
+		vecCurrent = xyzArray[i]
+		vecNew = np.reshape(np.dot(rotationMatrix, np.reshape(vecCurrent, [3,1])), [3])
+		xyzArray[i] = vecNew
+	
+	return xyzArray
+
+
+### Transfer XYZ_origin_hbond_midpoint list into array
+
+XYZarray = np.empty([Natom, 3])
+for i in range(Natom):
+    XYZarray[i] = np.array([XYZ_origin_hbond_midpoint[(i*4)+1], XYZ_origin_hbond_midpoint[(i*4)+2], XYZ_origin_hbond_midpoint[(i*4)+3]])
+
+### Setting XYZrotation to otput of rotation function
+
+XYZrotation = rotationTranslation(XYZarray, idx1, idx2)
+
+### Creating XYZ file from rotated XYZ coordinates
+
+f = open("XYZrotation.xyz", "w")
+f.write("%d \n" % (Natom))
+f.write("Comment \n")
+for i in range(Natom):
+    f.write("%s  %.6f  %.6f %.6f \n" % (XYZ[4*i], XYZrotation[(i,0)], XYZrotation[(i,1)], XYZrotation[(i,2)]))
+f.close()
+
+### Taking aligned array and putting back into XYZ list
+XYZalign = []
+for i in range(Natom):
+    XYZalign.append(XYZ[i*4])
+    for n in range(3):
+        XYZalign.append(XYZrotation[i,n])
+
+
+### Setting aligned list to XYZ for future operations
+XYZ = XYZalign
+
+### XYZ coord for Monomer 1 in list XYZmon1
+
+XYZmon1 = []
+for n in range(Natom):
+   if (ML[0][n] == 1):
+	XYZmon1.append(XYZ[4*n+1])
+	XYZmon1.append(XYZ[4*n+2])
+	XYZmon1.append(XYZ[4*n+3])
+
+### XYZ coord for Monomer 2 in list XYZmon2
+
+XYZmon2 = []
+for n in range(Natom):
+    if (ML[1][n] == 1):
+	XYZmon2.append(XYZ[4*n+1])
+	XYZmon2.append(XYZ[4*n+2])
+	XYZmon2.append(XYZ[4*n+3])
+
+### Shifting Monomer 2
+
+def mon2shift(zshift):
+    """Shifting z coord for monomer 2 by zshift"""
+    XYZmon2shift = copy.deepcopy(XYZmon2)
+    for n in range(2, len(XYZmon2), 3):
+        XYZmon2shift[n] += zshift 
+    return XYZmon2shift
+
+def mon2stepshift(nstep,zshift):
+    """Shifting z coord for monomer nstep times by zshift"""
+    mon2shifted = []
+    for i in range(-nstep,nstep+1):
+        mon2shifted.append(mon2shift(zshift * i))
+    return mon2shifted
+
+### Output to file functions 
+
+def XYZfile(nstep,zshift):
+    """Genrated an XYZ file based on nstep and zshift """
+    mon2test = mon2stepshift(nstep,zshift)
+    f = open("xyztemp.xyz", "w")
+    for k in range((nstep*2)+1):
+        f.write("%d \n" % (Natom))
+        f.write("Comment \n")
+        print Natom
+        print "Comment"
+        for i in range(Natom_mon1):
+            f.write("%s  %.6f  %.6f %.6f \n" % (XYZ[4*i], XYZmon1[3*i], XYZmon1[3*i+1], XYZmon1[3*i+2]))
+            print XYZmon1[3*i], XYZmon1[3*i+1], XYZmon1[3*i+2]
+        for n in range(Natom_mon2):
+            f.write("%s  %.6f  %.6f  %.6f \n" % (XYZ[(Natom_mon1 + n)*4], mon2test[k][3*n], mon2test[k][3*n+1], mon2test[k][3*n+2]))
+            print mon2test[k][3*n], mon2test[k][3*n+1], mon2test[k][3*n+2]
+    f.close()
+
+#print "XYZ file test outputs:"
+#print XYZfile(nstep,zshift)
+
+
+def qcheminput(nstep,zshift,qchemtemplate):
+    """Generates a Qchem input file based on nstep, zshift and a qchem template """
+    mon2test = mon2stepshift(nstep,zshift)
+    for k in range((nstep*2)+1):
+        f = open("qcheminput" + str(k), "w")
+        f.write("$molecule \n")
+        f.write("0 1 \n")
+        for i in range(Natom_mon1):
+            f.write("%s  %.6f  %.6f %.6f \n" % (XYZ[4*i], XYZmon1[3*i], XYZmon1[3*i+1], XYZmon1[3*i+2]))
+        for n in range(Natom_mon2):
+            f.write("%s  %.6f  %.6f  %.6f \n" % (XYZ[(Natom_mon1 + n)*4], mon2test[k][3*n], mon2test[k][3*n+1], mon2test[k][3*n+2]))
+        f.write("$end \n")
+        for n in range(len(qchemtemplate)):
+            f.write("%s" % qchemtemplate[n])
+        f.close()
+
+def runqchem(nstep):
+    """Runs qchem on generated qcheminput files """
+    for k in range((nstep*2)+1):
+        qchem = "/home/dlambrecht/meb168/ape/runqchem.sh" 
+        input = "qcheminput" + str(k)  
+        output = "qchem" + str(k) + ".out"
+        args = input + " " + output
+        print qchem, args 
+        check_call([qchem,args])   
+
+def getenergy(nstep):
+    """Gets the total energy from the qchem output file """
+    energy = []
+    for k in range((nstep*2)+1):
+        f = open("qchem" + str(k) + ".out", "r")
+        converged = False
+        for i, line in enumerate(f):
+            if "Total energy in the final basis set =" in line:
+                converged = True
+                tmp = line.split()
+                energy.append(float(tmp[-1]))
+        if not converged:
+            print "Qchem didn't work for step ", k
+        f.close()
+    return energy   
+
+### Functions in use for qchem
+
+if not restart: 
+    qcheminput(nstep,zshift,qchemtemplate)
+    runqchem(nstep)
+
+energy = []
+energy = getenergy(nstep)
+
+### Get bond distances
+
+def hbondlength(nstep, zshift):
+    """Gets distance between origin and monomer 2's hbonded atom"""
+    r = []
+    mon2 = mon2stepshift(nstep,zshift)
+    for k in range((nstep*2)+1):
+        r.append(abs(mon2[k][((idx2-Natom_mon1)*3)+2]))    
+    return r
+
+### Comment - make r always positive?
+
+print "Hbondlengths:"
+print hbondlength(nstep,zshift)
+print "Energy"
+print energy
+bondlength = []
+bondlength = hbondlength(nstep,zshift) 
+
+### plot bond length vs. energy
+
+if len(bondlength) != len(energy):
+    print "Bond length and energy lists not the same length!"
+    print "Bond length:", len(bondlength), "Energy:", len(energy)
+    sys.exit(1)
+
+#plt.plot(bondlength,energy,)
+#plt.ylabel("Energy")
+#plt.xlabel("Bond Length")
+#plt.show()
+
+### Calc d33 
+
+def getlowestenergy(energy):
+    """Gets the smallest energy value from energy list """
+    for n in range(len(energy)):
+        if energy[n] < n:
+            n == energy[n]
+    return energy[n] 
+
+#print "Lowest energy value:"
+Req = getlowestenergy(energy)
+#print Req
+
+def getdipolemoment(nstep):
+    """Gets the dipole moment from the qchem output file """
+    mu = []
+    for k in range((nstep*2)+1):
+        f = open("qchem" + str(k) + ".out", "r")
+        converged = False
+        for i, line in enumerate(f):
+            if "Dipole Moment (Debye)" in line:
+                converged = True
+                line = f.next()
+                tmp = line.split()
+                mu.append(float(tmp[-1]))
+        if not converged:
+            print "Qchem didn't work for step ", k
+        f.close()
+    return mu
+
+#print "Dipole moment list:"
+mu = getdipolemoment(nstep)
+#print mu
+
+### Mu prime calc
+
+def muprime(Req, bondlength, mu):
+    """gets coefficients for mu """
+    mucoef = []
+    mucoef = np.polyfit(bondlength, mu, 1)
+    print mucoef
+    return muPrimeFunc(Req,mucoef)
+     
+def muFunc(r,coefflist):
+    """mu function """
+    value = 0.0
+    for i in range(len(coefflist)):
+	value += coefflist[i]* r**(len(coefflist)-i-1)
+    return value
+
+def muPrimeFunc(r, coefflist):
+    """ mu prime function """
+    value = 0.0
+    for i in range(len(coefflist)-1):
+        value += (len(coefflist)-i)*r**(len(coefflist)-i-2)
+    return value
+
+
+### E double prime
+
+def generalpoly6(x, a, b, c, d, e, f, g):
+    """ General polynomial of degree 6 """ 
+    return a*x**6 + b*x**5 + c*x**4 + d*x**3 + e*x**2 + f*x + g
+
+def energydoubleprime(x, generalpoly6, bondlength, energy):
+    """Returns coefficients of the second der of the energy equation """
+    energyarray = np.array(energy)
+    bondlengtharray = np.array(bondlength)
+    print "Energydoubleprime stats" 
+    print energyarray
+    print bondlengtharray
+    engcoeff, engcov = curve_fit(generalpoly6, bondlengtharray, energyarray)
+    engcoeffdouble = []
+    for i in range(len(engcoeff) - 2):
+        engcoeffdouble.append(engcoeff[i]*(len(engcoeff)-1-i)*(len(engcoeff)-2-i)) 
+    return engcoeff, engcoeffdouble 
+
+def minimizepoly(func):
+    """Minimizes a function """
+    minimizedfunc = minimize(func, 1,(engcoeffdouble[0], engcoeffdouble[1], engcoeffdouble[2], engcoeffdouble[3], engcoeffdouble[4]))
+    return minimizedfunc
+
+def generalpoly4(x, a, b, c, d, e):
+    """General polynomial of degree 4 """
+    return a*x**4 + b*x**3 + c*x**2 + d*x + e     
+
+
+engcoeff, engcoeffdouble = energydoubleprime(Req, generalpoly6, bondlength, energy)
+
+Result = minimize(generalpoly6,1,(engcoeff[0], engcoeff[1], engcoeff[2], engcoeff[3], engcoeff[4],engcoeff[5], engcoeff[6]))
+Req = Result["x"][0]
+print "Req:", Req
+
+Edoubleprime =  generalpoly4(Req, engcoeffdouble[0], engcoeffdouble[1], engcoeffdouble[2], engcoeffdouble[3], engcoeffdouble[4])
+print "E double prime:", Edoubleprime 
+ 
+print "Mu :", mu 
+muprime = muprime(Req, bondlength, mu) 
+print "Mu prime:", muprime
+
+d33 = (- 1 / Req ) * ( 1 / Edoubleprime) * muprime 
+print "D33 no conversion:", d33
+print "D33 (pC / N):", d33 * (3.33564e-30/4.35974434e-18) / 1.0e-12
+print "Conversion factor, no pico:", (3.33564e-30/4.35974434e-18)
+
+

@@ -535,7 +535,7 @@ mu = getdipolemoment(nstep)
 
 ### Mu prime calc
 
-def muprime(Req, bondlength, mu):
+def muPrime(Req, bondlength, mu):
     """gets coefficients for mu """
     mucoef = []
     mucoef = np.polyfit(bondlength, mu, 1)
@@ -547,13 +547,15 @@ def muFunc(r,coefflist):
     value = 0.0
     for i in range(len(coefflist)):
 	value += coefflist[i]* r**(len(coefflist)-i-1)
+        print "muFunc Value:", value
     return value
 
 def muPrimeFunc(r, coefflist):
     """ mu prime function """
     value = 0.0
-    for i in range(len(coefflist)-1):
-        value += (len(coefflist)-i)*r**(len(coefflist)-i-2)
+    for i in range(1,len(coefflist)):
+        value += coefflist[i]*r**(len(coefflist)-i-2)
+        print "muPrimeFunc Value:", value
     return value
 
 
@@ -602,7 +604,7 @@ Edoubleprime =  generalpoly4(Req, engcoeffdouble[0], engcoeffdouble[1], engcoeff
 print "E double prime:", Edoubleprime 
  
 print "Mu :", mu 
-muprime = muprime(Req, bondlength, mu) 
+muprime = muPrime(Req, bondlength, mu) 
 print "Mu prime:", muprime
 
 d33 = (- 1 / Req ) * ( 1 / Edoubleprime) * muprime 

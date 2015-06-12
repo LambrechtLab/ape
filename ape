@@ -13,10 +13,10 @@ from subprocess import check_call
 from scipy.optimize import curve_fit
 from scipy.optimize import minimize
 
-usage="  Usage:   ape  xyz-file  qchem_template nstep zshift restart"
+usage="  Usage:   ape  xyz-file  qchem_template nstep zshift restart debug"
 
 ### Exit conditions if input != usage
-if len(sys.argv) != 5 and len(sys.argv) != 6 :
+if len(sys.argv) != 5 and len(sys.argv) != 6 and len(sys.argv) != 7:
     print usage
     sys.exit(1)
 
@@ -30,11 +30,14 @@ fqchem = sys.argv[2]
 nstep = int(sys.argv[3])
 zshift = float(sys.argv[4])
 restart = False
+debug = False
 
+if len(sys.argv) == 6 or len(sys.argv) == 7:
+    if sys.argv[5] == "restart":
+        restart = True
 
-if len(sys.argv) == 6 and sys.argv[5] == "restart":
-    restart = True
-    
+if len(sys.argv) == 7 and sys.argv[6] == "debug":
+    debug = True   
 
 ### Qchem File
 f = open(fqchem, "r")
@@ -43,11 +46,9 @@ f.close()
 
 ### XYZ File
 f = open(fxyz, "r")
-
 Natom = int(f.readline())
 print "Natom = ", Natom
 Comment = f.readline()
-
 for line in f:
     tmp = line.split()
     XYZ.append(tmp[0]) # atom symbol
@@ -57,7 +58,6 @@ for line in f:
 f.close()
 
 ### Reordering XYZ file based on adjacency 
-
 def qchemsort(XYZ):
     """Generates a Qchem input file for the XYZ list """
     f = open("qchemsortXYZ", "w")
@@ -103,17 +103,13 @@ def getsortedXYZ():
     f.close()
     return XYZsort
 
-## Running qchem sort
+### Running qchem sort
 qchemsort(XYZ)
 runqchemsort()
 XYZ = getsortedXYZ()
-print "Sorted XYZ list:"
-print XYZ
-
-### Uncommenting XYZ while using "../ape test2_align.xyz dfttemplate 3 0.05 restart" input changes d33 from -20 to 
-### -2.3 e -14 
-### Check from "Reordering XYZ file based on adjacency" to here
-
+if debug:
+    print "Qchem sorted XYZ list:"
+    print XYZ
 
 ### Identifying Hydrogen-bonded Atom pair
 
@@ -122,7 +118,6 @@ r_min = 1.3
 r_max = 2.5
 
 ### Initialising 
-
 idx1 = -1
 idx2 = -1
 hvec = np.array([0,0,0], 'd') # H bond vector/axis 
@@ -137,7 +132,6 @@ maxtol = 1.2
 rcovtable = {"H": 0.37, "C": 0.77, "N": 0.75, "O": 0.73}
 
 ### Finding Bond matrix
-
 for i in range(Natom):
     sym1 = XYZ[4*i]
    # if sym1 != "H": 
@@ -175,6 +169,7 @@ for i in range(Natom):
 		covmat[(i,j)] = 1
 
 ### Printing bondmatrix, covmat
+print "Bond matrix:"
 print covmat
 
 ### Making an empty dictionary
@@ -202,7 +197,6 @@ def addatom(i, in_monomer):
 		addatom(j, in_monomer)
 
 ### Defining ML, monomer list
-
 ML = []
 for i in range(Natom):
 	tmp = initializeML()
@@ -212,18 +206,19 @@ for i in range(Natom):
 		ML.append(tmp)
 
 ### Number of atoms in each monomer
-
 Natom_mon1 = sum(ML[0].values())
 Natom_mon2 = sum(ML[1].values())
-    
-### Exit conditions for not having 2 monomers   
 
+if debug:
+    print "Number of atoms in monomer 1:", Natom_mon1 
+    print "Number of aroms in monomer 2:", Natom_mon2
+   
+### Exit conditions for not having 2 monomers   
 if len(ML) > 2:
     print "Expected 2 monomers, found", len(ML)
     sys.exit(1)
 
 ### Finding h bond pair (correct)
-
 def findHbondpair():
     """ Finding the Hydrogen bond pair"""
     r_min = 10**12
@@ -347,7 +342,6 @@ for i in range(Natom):
 XYZ = XYZalign
 
 ### XYZ coord for Monomer 1 in list XYZmon1
-
 XYZmon1 = []
 for n in range(Natom):
    if (ML[0][n] == 1):
@@ -356,13 +350,17 @@ for n in range(Natom):
 	XYZmon1.append(XYZ[4*n+3])
 
 ### XYZ coord for Monomer 2 in list XYZmon2
-
 XYZmon2 = []
 for n in range(Natom):
     if (ML[1][n] == 1):
 	XYZmon2.append(XYZ[4*n+1])
 	XYZmon2.append(XYZ[4*n+2])
 	XYZmon2.append(XYZ[4*n+3])
+#if debug:
+#    print "Monomer 1:"
+#    print XYZmon1
+#    print "Monomer 2:"
+#    print XYZmon2
 
 ### Shifting Monomer 2
 
@@ -399,9 +397,9 @@ def XYZfile(nstep,zshift):
             print mon2test[k][3*n], mon2test[k][3*n+1], mon2test[k][3*n+2]
     f.close()
 
-#print "XYZ file test outputs:"
-#print XYZfile(nstep,zshift)
-
+#if debug:
+#    print "XYZ file outputs from nstep and zshift:"
+#    print XYZfile(nstep,zshift)
 
 def qcheminput(nstep,zshift,qchemtemplate):
     """Generates a Qchem input file based on nstep, zshift and a qchem template """
@@ -446,7 +444,6 @@ def getenergy(nstep):
     return energy   
 
 ### Functions in use for qchem
-
 if not restart: 
     qcheminput(nstep,zshift,qchemtemplate)
     runqchem(nstep)
@@ -464,22 +461,20 @@ def hbondlength(nstep, zshift):
         r.append(abs(mon2[k][((idx2-Natom_mon1)*3)+2]))    
     return r
 
-### Comment - make r always positive?
-
-print "Hbondlengths:"
-print hbondlength(nstep,zshift)
-print "Energy"
-print energy
+if debug:
+    print "Hydrogen bond lengths:"
+    print hbondlength(nstep,zshift)
+    print "Energy values from qchem"
+    print energy
 bondlength = []
 bondlength = hbondlength(nstep,zshift) 
-
-### plot bond length vs. energy
 
 if len(bondlength) != len(energy):
     print "Bond length and energy lists not the same length!"
     print "Bond length:", len(bondlength), "Energy:", len(energy)
     sys.exit(1)
 
+### plot bond length vs. energy
 #plt.plot(bondlength,energy,)
 #plt.ylabel("Energy")
 #plt.xlabel("Bond Length")
@@ -494,9 +489,10 @@ def getlowestenergy(energy):
             n == energy[n]
     return energy[n] 
 
-#print "Lowest energy value:"
 Req = getlowestenergy(energy)
-#print Req
+if debug:
+    print "Lowest energy value:", Req
+
 
 def Reqguess(energy,bondlength):
     """Gets the smallest Req value to use for minimization """
@@ -508,9 +504,9 @@ def Reqguess(energy,bondlength):
             index = n 
     return energy[index], bondlength[index]
 
-print "Lowest energy & Req Guess:"
 loweng, Reqguess = Reqguess(energy,bondlength)
-print loweng, Reqguess
+if debug:
+    print "Lowest energy & Req Guess:", loweng, Reqguess
 
 def getdipolemoment(nstep):
     """Gets the dipole moment from the qchem output file """
@@ -529,9 +525,10 @@ def getdipolemoment(nstep):
         f.close()
     return mu
 
-#print "Dipole moment list:"
 mu = getdipolemoment(nstep)
-#print mu
+if debug:
+    print "Dipole moment list:"
+    print mu
 
 ### Mu prime calc
 
@@ -555,9 +552,8 @@ def muPrimeFunc(r, coefflist):
     value = 0.0
     for i in range(1,len(coefflist)):
         value += coefflist[i]*r**(len(coefflist)-i-2)
-        print "muPrimeFunc Value:", value
+#        print "muPrimeFunc Value:", value
     return value
-
 
 ### E double prime
 
@@ -569,11 +565,14 @@ def energydoubleprime(x, generalpoly6, bondlength, energy):
     """Returns coefficients of the second der of the energy equation """
     energyarray = np.array(energy)
     bondlengtharray = np.array(bondlength)
-    print "Energydoubleprime stats" 
-    print energyarray
-    print bondlengtharray
+#    if debug:
+#        print "Energy double prime input arrays" 
+#        print "Energy array:"
+#        print energyarray
+#        print "Bond length array:"
+#        print bondlengtharray
     engcoeff = np.polyfit(bondlengtharray, energyarray, 6)
-##    engcoeff, engcov = curve_fit(generalpoly6, bondlengtharray, energyarray)
+###    engcoeff, engcov = curve_fit(generalpoly6, bondlengtharray, energyarray)
     engcoeffdouble = []
     for i in range(len(engcoeff) - 2):
         engcoeffdouble.append(engcoeff[i]*(len(engcoeff)-1-i)*(len(engcoeff)-2-i)) 
@@ -590,26 +589,33 @@ def generalpoly4(x, a, b, c, d, e):
 
 
 engcoeff, engcoeffdouble = energydoubleprime(Req, generalpoly6, bondlength, energy)
-print "Curve fit results" 
-print "Energy coefficient:", engcoeff
-print "Energy coefficient double prime:", engcoeffdouble
+
+if debug:
+    print "Curve fit results" 
+    print "Energy coefficient:", engcoeff
+    print "Energy coefficient double prime:", engcoeffdouble
 
 Result = minimize(generalpoly6,Reqguess,(engcoeff[0], engcoeff[1], engcoeff[2], engcoeff[3], engcoeff[4],engcoeff[5], engcoeff[6]), tol=1e-12)
-print "Result stats:"
-print Result
 Req = Result["x"][0]
-print "Req:", Req
+if debug:
+    print "Minimize output:"
+    print  Result
+    print "Req:", Req
 
 Edoubleprime =  generalpoly4(Req, engcoeffdouble[0], engcoeffdouble[1], engcoeffdouble[2], engcoeffdouble[3], engcoeffdouble[4])
-print "E double prime:", Edoubleprime 
+if debug:
+    print "E double prime:", Edoubleprime 
  
-print "Mu :", mu 
 muprime = muPrime(Req, bondlength, mu) 
-print "Mu prime:", muprime
+if debug:
+    print "Mu:", mu
+    print "Mu prime:", muprime
 
 d33 = (- 1 / Req ) * ( 1 / Edoubleprime) * muprime 
-print "D33 no conversion:", d33
+if debug:
+    print "D33 no conversion:", d33
 print "D33 (pC / N):", d33 * (3.33564e-30/4.35974434e-18) / 1.0e-12
-print "Conversion factor, no pico:", (3.33564e-30/4.35974434e-18)
+if debug:
+    print "Conversion factor, no pico:", (3.33564e-30/4.35974434e-18)
 
 

@@ -80,7 +80,7 @@ def runqchemsort():
     qchem = "/home/dlambrecht/meb168/ape/runqchem.sh"
     input = "qchemsortXYZ"
     output = "qchemsortXYZ.out"
-    args = input + " " + output
+    args = input + " " + output  
     print qchem, args
     check_call([qchem,args])
 
@@ -104,10 +104,11 @@ def getsortedXYZ():
     return XYZsort
 
 ## Running qchem sort
-#qchemsort(XYZ)
-#runqchemsort()
-#XYZ = getsortedXYZ()
-
+qchemsort(XYZ)
+runqchemsort()
+XYZ = getsortedXYZ()
+print "Sorted XYZ list:"
+print XYZ
 
 ### Uncommenting XYZ while using "../ape test2_align.xyz dfttemplate 3 0.05 restart" input changes d33 from -20 to 
 ### -2.3 e -14 
@@ -497,6 +498,20 @@ def getlowestenergy(energy):
 Req = getlowestenergy(energy)
 #print Req
 
+def Reqguess(energy,bondlength):
+    """Gets the smallest Req value to use for minimization """
+    eng = 1e12
+    index = 0
+    for n in range(len(energy)):
+        if energy[n] < eng:
+            eng = energy[n]
+            index = n 
+    return energy[index], bondlength[index]
+
+print "Lowest energy & Req Guess:"
+loweng, Reqguess = Reqguess(energy,bondlength)
+print loweng, Reqguess
+
 def getdipolemoment(nstep):
     """Gets the dipole moment from the qchem output file """
     mu = []
@@ -555,7 +570,8 @@ def energydoubleprime(x, generalpoly6, bondlength, energy):
     print "Energydoubleprime stats" 
     print energyarray
     print bondlengtharray
-    engcoeff, engcov = curve_fit(generalpoly6, bondlengtharray, energyarray)
+    engcoeff = np.polyfit(bondlengtharray, energyarray, 6)
+##    engcoeff, engcov = curve_fit(generalpoly6, bondlengtharray, energyarray)
     engcoeffdouble = []
     for i in range(len(engcoeff) - 2):
         engcoeffdouble.append(engcoeff[i]*(len(engcoeff)-1-i)*(len(engcoeff)-2-i)) 
@@ -572,8 +588,13 @@ def generalpoly4(x, a, b, c, d, e):
 
 
 engcoeff, engcoeffdouble = energydoubleprime(Req, generalpoly6, bondlength, energy)
+print "Curve fit results" 
+print "Energy coefficient:", engcoeff
+print "Energy coefficient double prime:", engcoeffdouble
 
-Result = minimize(generalpoly6,1,(engcoeff[0], engcoeff[1], engcoeff[2], engcoeff[3], engcoeff[4],engcoeff[5], engcoeff[6]))
+Result = minimize(generalpoly6,Reqguess,(engcoeff[0], engcoeff[1], engcoeff[2], engcoeff[3], engcoeff[4],engcoeff[5], engcoeff[6]), tol=1e-12)
+print "Result stats:"
+print Result
 Req = Result["x"][0]
 print "Req:", Req
 

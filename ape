@@ -129,7 +129,7 @@ mintol = .5
 maxtol = 1.2
 
 ### Covalent radii of atoms
-rcovtable = {"H": 0.37, "C": 0.77, "N": 0.75, "O": 0.73}
+rcovtable = {"H": 0.37, "C": 0.77, "N": 0.75, "O": 0.73, "F":0.71, "P":1.06, "S":1.02, "Cl":0.99, "Se":1.16, "Br":1.14}
 
 ### Finding Bond matrix
 for i in range(Natom):
@@ -420,7 +420,7 @@ def qcheminput(nstep,zshift,qchemtemplate):
 def runqchem(nstep):
     """Runs qchem on generated qcheminput files """
     for k in range((nstep*2)+1):
-        qchem = "/home/dlambrecht/meb168/ape/runqchem.sh" 
+        qchem = "runqchem.sh" 
         input = "qcheminput" + str(k)  
         output = "qchem" + str(k) + ".out"
         args = input + " " + output

@@ -3,7 +3,6 @@
 # Accelerated Piezo Evaluator (APE) returns the piezo-coefficient (d33) starting
 # from an XYZ input.
 
-### Imports
 import sys, math
 import numpy as np
 from collections import defaultdict
@@ -12,32 +11,30 @@ import matplotlib.pyplot as plt
 from subprocess import check_call
 from scipy.optimize import curve_fit
 from scipy.optimize import minimize
+from argparse import ArgumentParser
 
-usage="  Usage:   ape  xyz-file  qchem_template nstep zshift restart debug"
+def getarguments():
+    """Gets arguments from the input """ 
+    parser = ArgumentParser(prog="Accelerated Piezo Evaluator (APE)", description="Returns piezo-coefficient (D33) using an XYZ file input.")
+    parser.add_argument("xyzfile", help="Name of the XYZ file to be used. Example.xyz")
+    parser.add_argument("qchem_input", help="Name of the qchem input file to be used to carry out the calculations.")
+    parser.add_argument("-n","--nstep", default=15, help="Number of shifts used in calculations. Total number of shifts is nstep*2+1. Default = 15", type=int)
+    parser.add_argument("-z","--zshift", default=0.05, help="How large the shifts are in atomic units. Default = 0.05", type=float)
+    parser.add_argument("-r","--restart", help="Reruns APE without doing full qchem calculations using existing qchem output files.",  action="store_true")
+    parser.add_argument("-d","--debug", help="Runs debug mode that gives more information about intermediary calculations in stdout.", action="store_true")
+    opts=parser.parse_args()
+    return opts
+input = getarguments() 
+fxyz = input.xyzfile
+fqchem = input.qchem_input
+nstep = input.nstep
+zshift = input.zshift
+restart = input.restart 
+debug = input.debug
 
-### Exit conditions if input != usage
-if len(sys.argv) != 5 and len(sys.argv) != 6 and len(sys.argv) != 7:
-    print usage
-    sys.exit(1)
-
-### Read in XYZ file and Qchem file  
-
-#### List of XYZ coords plus Atom Symbol & Qchem input list 
+#### List of XYZ coords plus Atom Symbol & Qchem input list
 XYZ = [] 
 qchemtemplate = []
-fxyz = sys.argv[1]
-fqchem = sys.argv[2]
-nstep = int(sys.argv[3])
-zshift = float(sys.argv[4])
-restart = False
-debug = False
-
-if len(sys.argv) == 6 or len(sys.argv) == 7:
-    if sys.argv[5] == "restart":
-        restart = True
-
-if len(sys.argv) == 7 and sys.argv[6] == "debug":
-    debug = True   
 
 ### Qchem File
 f = open(fqchem, "r")
@@ -107,64 +104,44 @@ def getsortedXYZ():
 qchemsort(XYZ)
 runqchemsort()
 XYZ = getsortedXYZ()
+
 if debug:
     print "Qchem sorted XYZ list:"
     print XYZ
 
 ### Identifying Hydrogen-bonded Atom pair
-
 ### H bond radius constraints
 r_min = 1.3
 r_max = 2.5
-
 ### Initialising 
 idx1 = -1
 idx2 = -1
 hvec = np.array([0,0,0], 'd') # H bond vector/axis 
 bmat = np.zeros(shape=(Natom,Natom)) # Bond matrix 
 covmat = np.zeros(shape=(Natom,Natom),dtype = np.int) #Covalent
-
 ### Covalent bond tolerance 
 mintol = .5    
 maxtol = 1.2
-
 ### Covalent radii of atoms
 rcovtable = {"H": 0.37, "C": 0.77, "N": 0.75, "O": 0.73, "F":0.71, "P":1.06, "S":1.02, "Cl":0.99, "Se":1.16, "Br":1.14}
 
 ### Finding Bond matrix
 for i in range(Natom):
     sym1 = XYZ[4*i]
-   # if sym1 != "H": 
-   #     continue
-	
     ri = rcovtable[sym1]	
     x1 = XYZ[4*i+1]
     y1 = XYZ[4*i+2]
     z1 = XYZ[4*i+3]
-
     for j in range(Natom):
-        
         sym2 = XYZ[4*j]
 	rj = rcovtable[sym2]
         x2 = XYZ[4*j+1]
         y2 = XYZ[4*j+2]
         z2 = XYZ[4*j+3]
-
         r2 = (x1-x2)**2 + (y1-y2)**2 + (z1-z2)**2
         r = math.sqrt(r2)
 	bmat[(i,j)] = r
- 
-#        if r >= r_min and r <= r_max:
-#           idx1 = i
-#            idx2 = j
-#            hvec[0] = x1 - x2
-#            hvec[1] = y1 - y2
-#            hvec[2] = z1 - z2
-
-### Bond Matrix
-	
 	rcov = ri + rj
-	# print("i = %d, j = %d    r = %.3f  rcov = %.3f" % (i, j, r, rcov))
 	if (r >= mintol * rcov and r <= maxtol * rcov) or i == j: 
 		covmat[(i,j)] = 1
 
@@ -173,13 +150,11 @@ print "Bond matrix:"
 print covmat
 
 ### Making an empty dictionary
-
 def initializeML():
     """Making an empty dictionary """
     return dict([(x, 0) for x in range(Natom)])
 
 ### Monomer List building functions
-
 def boundto(i):
     """Finds bonded atoms"""
     boundtolist = []
@@ -274,7 +249,7 @@ for i in range(Natom):
 def rotationTranslation(xyzArray, index1, index2):
 	"""
 	    a function for rotating and translating a molecule so that a given line
-	    segment between two atoms lies on the z axix
+	    segment between two atoms lies on the z axix.  Ty Keith!
         """
 	zVec = np.array([0, 0, 1.0])
 	yVec = np.array([0, 1.0, 0])
@@ -310,19 +285,15 @@ def rotationTranslation(xyzArray, index1, index2):
 	
 	return xyzArray
 
-
 ### Transfer XYZ_origin_hbond_midpoint list into array
-
 XYZarray = np.empty([Natom, 3])
 for i in range(Natom):
     XYZarray[i] = np.array([XYZ_origin_hbond_midpoint[(i*4)+1], XYZ_origin_hbond_midpoint[(i*4)+2], XYZ_origin_hbond_midpoint[(i*4)+3]])
 
 ### Setting XYZrotation to otput of rotation function
-
 XYZrotation = rotationTranslation(XYZarray, idx1, idx2)
 
 ### Creating XYZ file from rotated XYZ coordinates
-
 f = open("XYZrotation.xyz", "w")
 f.write("%d \n" % (Natom))
 f.write("Comment \n")
@@ -336,7 +307,6 @@ for i in range(Natom):
     XYZalign.append(XYZ[i*4])
     for n in range(3):
         XYZalign.append(XYZrotation[i,n])
-
 
 ### Setting aligned list to XYZ for future operations
 XYZ = XYZalign
@@ -356,11 +326,6 @@ for n in range(Natom):
 	XYZmon2.append(XYZ[4*n+1])
 	XYZmon2.append(XYZ[4*n+2])
 	XYZmon2.append(XYZ[4*n+3])
-#if debug:
-#    print "Monomer 1:"
-#    print XYZmon1
-#    print "Monomer 2:"
-#    print XYZmon2
 
 ### Shifting Monomer 2
 
@@ -379,7 +344,6 @@ def mon2stepshift(nstep,zshift):
     return mon2shifted
 
 ### Output to file functions 
-
 def XYZfile(nstep,zshift):
     """Genrated an XYZ file based on nstep and zshift """
     mon2test = mon2stepshift(nstep,zshift)
@@ -396,7 +360,7 @@ def XYZfile(nstep,zshift):
             f.write("%s  %.6f  %.6f  %.6f \n" % (XYZ[(Natom_mon1 + n)*4], mon2test[k][3*n], mon2test[k][3*n+1], mon2test[k][3*n+2]))
             print mon2test[k][3*n], mon2test[k][3*n+1], mon2test[k][3*n+2]
     f.close()
-
+### Useful if you need XYZ files
 #if debug:
 #    print "XYZ file outputs from nstep and zshift:"
 #    print XYZfile(nstep,zshift)
@@ -417,6 +381,17 @@ def qcheminput(nstep,zshift,qchemtemplate):
             f.write("%s" % qchemtemplate[n])
         f.close()
 
+def isconverged(filename):
+    """Checks if previous qchem calculations have been done and skips them if so """
+    try:
+        f=open(filename,"r")
+        for line in f:
+            if "Convergence criterion met" in line:
+                return True
+    except:
+        pass
+    return False
+
 def runqchem(nstep):
     """Runs qchem on generated qcheminput files """
     for k in range((nstep*2)+1):
@@ -425,7 +400,10 @@ def runqchem(nstep):
         output = "qchem" + str(k) + ".out"
         args = input + " " + output
         print qchem, args 
-        check_call([qchem,args])   
+        if not isconverged(output):
+            check_call([qchem,args])   
+        else: 
+            print "Skipping step k!"
 
 def getenergy(nstep):
     """Gets the total energy from the qchem output file """
@@ -493,7 +471,6 @@ Req = getlowestenergy(energy)
 if debug:
     print "Lowest energy value:", Req
 
-
 def Reqguess(energy,bondlength):
     """Gets the smallest Req value to use for minimization """
     eng = 1e12
@@ -502,9 +479,9 @@ def Reqguess(energy,bondlength):
         if energy[n] < eng:
             eng = energy[n]
             index = n 
-    return energy[index], bondlength[index]
+    return energy[index], bondlength[index], index
 
-loweng, Reqguess = Reqguess(energy,bondlength)
+loweng, Reqguess, Minidx = Reqguess(energy,bondlength)
 if debug:
     print "Lowest energy & Req Guess:", loweng, Reqguess
 
@@ -526,9 +503,31 @@ def getdipolemoment(nstep):
     return mu
 
 mu = getdipolemoment(nstep)
+
 if debug:
     print "Dipole moment list:"
     print mu
+
+def recenter(MinIdx,bondlength,energy,mu):
+    """recenters Bonglength & Energy lists to be around minimum energy value for better curve fit calc"""
+    Minbondlength = []
+    Minenergy = []
+    Minmu = []
+    for k in reversed(range(3,-4,-1)):
+        Minbondlength.append(bondlength[MinIdx+k])
+    for k in reversed(range(3,-4,-1)):
+        Minenergy.append(energy[MinIdx+k])
+    for k in reversed(range(3,-4,-1)):
+        Minmu.append(mu[MinIdx+k])
+    return Minenergy, Minbondlength, Minmu
+energy, bondlength, mu = recenter(Minidx,bondlength,energy,mu)
+
+### plot bond length vs. energy
+plt.plot(bondlength,energy,)
+plt.ylabel("Energy")
+plt.xlabel("Bond Length")
+plt.show()
+
 
 ### Mu prime calc
 
@@ -561,6 +560,8 @@ def generalpoly6(x, a, b, c, d, e, f, g):
     """ General polynomial of degree 6 """ 
     return a*x**6 + b*x**5 + c*x**4 + d*x**3 + e*x**2 + f*x + g
 
+
+
 def energydoubleprime(x, generalpoly6, bondlength, energy):
     """Returns coefficients of the second der of the energy equation """
     energyarray = np.array(energy)
@@ -571,7 +572,7 @@ def energydoubleprime(x, generalpoly6, bondlength, energy):
 #        print energyarray
 #        print "Bond length array:"
 #        print bondlengtharray
-    engcoeff = np.polyfit(bondlengtharray, energyarray, 6)
+    engcoeff = np.polyfit(bondlengtharray, energyarray, 2)
 ###    engcoeff, engcov = curve_fit(generalpoly6, bondlengtharray, energyarray)
     engcoeffdouble = []
     for i in range(len(engcoeff) - 2):
@@ -586,7 +587,9 @@ def minimizepoly(func):
 def generalpoly4(x, a, b, c, d, e):
     """General polynomial of degree 4 """
     return a*x**4 + b*x**3 + c*x**2 + d*x + e     
-
+def generalpoly2(x, a, b, c):
+    """General polynomial of degree 2 """
+    return a*x**2 + b*x + c
 
 engcoeff, engcoeffdouble = energydoubleprime(Req, generalpoly6, bondlength, energy)
 
@@ -595,14 +598,17 @@ if debug:
     print "Energy coefficient:", engcoeff
     print "Energy coefficient double prime:", engcoeffdouble
 
-Result = minimize(generalpoly6,Reqguess,(engcoeff[0], engcoeff[1], engcoeff[2], engcoeff[3], engcoeff[4],engcoeff[5], engcoeff[6]), tol=1e-12)
+#Result = minimize(generalpoly6,Reqguess,(engcoeff[0], engcoeff[1], engcoeff[2], engcoeff[3], engcoeff[4],engcoeff[5], engcoeff[6]), tol=1e-12)
+Result = minimize(generalpoly2,Reqguess,(engcoeff[0], engcoeff[1], engcoeff[2]), tol=1e-12)
 Req = Result["x"][0]
+
 if debug:
     print "Minimize output:"
     print  Result
     print "Req:", Req
 
-Edoubleprime =  generalpoly4(Req, engcoeffdouble[0], engcoeffdouble[1], engcoeffdouble[2], engcoeffdouble[3], engcoeffdouble[4])
+#Edoubleprime =  generalpoly4(Req, engcoeffdouble[0], engcoeffdouble[1], engcoeffdouble[2], engcoeffdouble[3], engcoeffdouble[4])
+Edoubleprime = 2*engcoeffdouble[0]
 if debug:
     print "E double prime:", Edoubleprime 
  

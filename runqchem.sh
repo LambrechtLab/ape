@@ -1,4 +1,4 @@
 #!/bin/bash
 
 . `dirname $0`/qcrc 
-qchem $1 $2 
+qchem -nt 8 $1 $2 

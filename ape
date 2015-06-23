@@ -2,7 +2,7 @@
 
 # Accelerated Piezo Evaluator (APE) returns the piezo-coefficient (d33) starting
 # from an XYZ input.
-
+import subprocess 
 import sys, math
 import numpy as np
 from collections import defaultdict
@@ -22,6 +22,7 @@ def getarguments():
     parser.add_argument("-z","--zshift", default=0.05, help="How large the shifts are in atomic units. Default = 0.05", type=float)
     parser.add_argument("-r","--restart", help="Reruns APE without doing full qchem calculations using existing qchem output files.",  action="store_true")
     parser.add_argument("-d","--debug", help="Runs debug mode that gives more information about intermediary calculations in stdout.", action="store_true")
+    parser.add_argument("--ppn", default=1, help="Number of cores to use for calculations", type=int)
     opts=parser.parse_args()
     return opts
 input = getarguments() 
@@ -31,6 +32,7 @@ nstep = input.nstep
 zshift = input.zshift
 restart = input.restart 
 debug = input.debug
+ppn = input.ppn
 
 #### List of XYZ coords plus Atom Symbol & Qchem input list
 XYZ = [] 
@@ -74,10 +76,10 @@ def qchemsort(XYZ):
 
 def runqchemsort():
     """Runs qchem on XYZ file to sort by adjacency """
-    qchem = "/home/dlambrecht/meb168/ape/runqchem.sh"
+    qchem = "runqchem.sh"
     input = "qchemsortXYZ"
     output = "qchemsortXYZ.out"
-    args = input + " " + output  
+    args = str(ppn) + "   " + input + "   " + output   
     print qchem, args
     check_call([qchem,args])
 
@@ -102,6 +104,7 @@ def getsortedXYZ():
 
 ### Running qchem sort
 qchemsort(XYZ)
+print "Calling Q-Chem ..."
 runqchemsort()
 XYZ = getsortedXYZ()
 
@@ -392,16 +395,18 @@ def isconverged(filename):
         pass
     return False
 
-def runqchem(nstep):
+def runqchem(nstep,ppn):
     """Runs qchem on generated qcheminput files """
     for k in range((nstep*2)+1):
         qchem = "runqchem.sh" 
         input = "qcheminput" + str(k)  
         output = "qchem" + str(k) + ".out"
-        args = input + " " + output
+#        args = input + " " + output
+        args = str(ppn) + " " + input + " " + output  
         print qchem, args 
         if not isconverged(output):
             check_call([qchem,args])   
+#            subprocess.check_output([qchem,args],stderr=subprocess.STDOUT,shell=True)
         else: 
             print "Skipping step k!"
 
@@ -424,7 +429,7 @@ def getenergy(nstep):
 ### Functions in use for qchem
 if not restart: 
     qcheminput(nstep,zshift,qchemtemplate)
-    runqchem(nstep)
+    runqchem(nstep,ppn)
 
 energy = []
 energy = getenergy(nstep)
@@ -572,17 +577,59 @@ def energydoubleprime(x, generalpoly6, bondlength, energy):
 #        print energyarray
 #        print "Bond length array:"
 #        print bondlengtharray
-    engcoeff = np.polyfit(bondlengtharray, energyarray, 2)
+### Degree 6 currently 
+    engcoeff = np.polyfit(bondlengtharray, energyarray, 6)
 ###    engcoeff, engcov = curve_fit(generalpoly6, bondlengtharray, energyarray)
     engcoeffdouble = []
     for i in range(len(engcoeff) - 2):
         engcoeffdouble.append(engcoeff[i]*(len(engcoeff)-1-i)*(len(engcoeff)-2-i)) 
     return engcoeff, engcoeffdouble 
 
-def minimizepoly(func):
-    """Minimizes a function """
-    minimizedfunc = minimize(func, 1,(engcoeffdouble[0], engcoeffdouble[1], engcoeffdouble[2], engcoeffdouble[3], engcoeffdouble[4]))
-    return minimizedfunc
+
+####NOT USED
+#def minimizepoly(func):
+#    """Minimizes a function """
+#    minimizedfunc = minimize(func, 1,(engcoeffdouble[0], engcoeffdouble[1], engcoeffdouble[2], engcoeffdouble[3], engcoeffdouble[4]))
+#    return minimizedfunc
+
+
+def find_minimum_newton(fit_function, x0=2.1):
+    """
+    Find the minimum of a function via a newton like method
+    fit_function: the function
+    x0: initial guess (should be pretty close)
+    returns:
+    xmin: the minimum x-value
+    ymin: the minimum y-value
+    """
+
+    derivfit = np.polyder(fit_function, m = 1)
+
+    derivfit2 = np.polyder(fit_function, m=2)
+
+
+    xCurrent = x0
+
+    for i in range(100):
+
+        yCurrent = derivfit(xCurrent) #function value
+
+        mCurrent = derivfit2(xCurrent) #slope value
+
+        xCurrent = xCurrent - yCurrent/mCurrent
+
+
+    xmin = xCurrent
+
+    ymin = fit_function(xCurrent)
+
+    if derivfit(xCurrent) > 1e-11:
+
+        print 'did not successfully find minimum'
+
+    return xmin, ymin
+
+
 
 def generalpoly4(x, a, b, c, d, e):
     """General polynomial of degree 4 """
@@ -597,22 +644,38 @@ if debug:
     print "Curve fit results" 
     print "Energy coefficient:", engcoeff
     print "Energy coefficient double prime:", engcoeffdouble
+### Using Deg 2
 
 #Result = minimize(generalpoly6,Reqguess,(engcoeff[0], engcoeff[1], engcoeff[2], engcoeff[3], engcoeff[4],engcoeff[5], engcoeff[6]), tol=1e-12)
-Result = minimize(generalpoly2,Reqguess,(engcoeff[0], engcoeff[1], engcoeff[2]), tol=1e-12)
-Req = Result["x"][0]
+#Result = minimize(generalpoly2,Reqguess,(engcoeff[0], engcoeff[1], engcoeff[2]), tol=1e-12)
+#Req = Result["x"][0]
+### Keith's thingy
+
+fit_coeff = np.polyfit(bondlength, energy, 6)
+fit_func = np.poly1d(fit_coeff)
+Req, ymin = find_minimum_newton(fit_func)
+dervfit = np.polyder(fit_func, m = 2)
+curvature = dervfit(Req)
+print "dervfit:", dervfit 
+print "curvature:", curvature
+
+fit_coeff_mu = np.polyfit(bondlength, mu, 6)
+fit_func_mu = np.poly1d(fit_coeff_mu)
+Mudervfit = np.polyder(fit_func_mu)
+print "Mu Derv fit:", Mudervfit(Req)
+muprime = Mudervfit(Req)
 
 if debug:
     print "Minimize output:"
-    print  Result
+#    print  Result
     print "Req:", Req
-
-#Edoubleprime =  generalpoly4(Req, engcoeffdouble[0], engcoeffdouble[1], engcoeffdouble[2], engcoeffdouble[3], engcoeffdouble[4])
-Edoubleprime = 2*engcoeffdouble[0]
+### Using Deg 6 
+Edoubleprime =  generalpoly4(Req, engcoeffdouble[0], engcoeffdouble[1], engcoeffdouble[2], engcoeffdouble[3], engcoeffdouble[4])
+#Edoubleprime = 2*engcoeffdouble[0]
 if debug:
     print "E double prime:", Edoubleprime 
  
-muprime = muPrime(Req, bondlength, mu) 
+#muprime = muPrime(Req, bondlength, mu) 
 if debug:
     print "Mu:", mu
     print "Mu prime:", muprime

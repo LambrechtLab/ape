@@ -18,7 +18,7 @@ def getarguments():
     parser = ArgumentParser(prog="Accelerated Piezo Evaluator (APE)", description="Returns piezo-coefficient (D33) using an XYZ file input.")
     parser.add_argument("xyzfile", help="Name of the XYZ file to be used. Example.xyz")
     parser.add_argument("qchem_input", help="Name of the qchem input file to be used to carry out the calculations.")
-    parser.add_argument("-n","--nstep", default=15, help="Number of shifts used in calculations. Total number of shifts is nstep*2+1. Default = 15", type=int)
+    parser.add_argument("-n","--nstep", default=20, help="Number of shifts used in calculations. Total number of shifts is nstep*2+1. Default = 15", type=int)
     parser.add_argument("-z","--zshift", default=0.05, help="How large the shifts are in atomic units. Default = 0.05", type=float)
     parser.add_argument("-r","--restart", help="Reruns APE without doing full qchem calculations using existing qchem output files.",  action="store_true")
     parser.add_argument("-d","--debug", help="Runs debug mode that gives more information about intermediary calculations in stdout.", action="store_true")
@@ -58,7 +58,7 @@ f.close()
 
 ### Reordering XYZ file based on adjacency 
 def qchemsort(XYZ):
-    """Generates a Qchem input file for the XYZ list """
+    """Generates a Qchem input file for reordering the XYZ list """
     f = open("qchemsortXYZ", "w")
     f.write("$molecule \n")
     f.write("0 1 \n")
@@ -331,7 +331,6 @@ for n in range(Natom):
 	XYZmon2.append(XYZ[4*n+3])
 
 ### Shifting Monomer 2
-
 def mon2shift(zshift):
     """Shifting z coord for monomer 2 by zshift"""
     XYZmon2shift = copy.deepcopy(XYZmon2)
@@ -368,11 +367,13 @@ def XYZfile(nstep,zshift):
 #    print "XYZ file outputs from nstep and zshift:"
 #    print XYZfile(nstep,zshift)
 
-def qcheminput(nstep,zshift,qchemtemplate):
+def qcheminput(nstep,zshift,qchemtemplate,bondlength):
     """Generates a Qchem input file based on nstep, zshift and a qchem template """
     mon2test = mon2stepshift(nstep,zshift)
     for k in range((nstep*2)+1):
         f = open("qcheminput" + str(k), "w")
+        comment = "!BondLength = " + str(bondlength[k]) +" \n"
+        f.write(comment)
         f.write("$molecule \n")
         f.write("0 1 \n")
         for i in range(Natom_mon1):
@@ -401,14 +402,44 @@ def runqchem(nstep,ppn):
         qchem = "runqchem.sh" 
         input = "qcheminput" + str(k)  
         output = "qchem" + str(k) + ".out"
-#        args = input + " " + output
         args = str(ppn) + " " + input + " " + output  
         print qchem, args 
         if not isconverged(output):
             check_call([qchem,args])   
-#            subprocess.check_output([qchem,args],stderr=subprocess.STDOUT,shell=True)
         else: 
             print "Skipping step k!"
+
+#def rerunqcheminput(k,nstep,zshift,qchemtemplate):
+#    """Generates a Qchem input file to accomidate recentering of data """
+#    mon2test = mon2stepshift(nstep,zshift)
+#    for j in range(k,(nstep*2)+4):
+#        f = open("qcheminput" + str(j), "w")
+#
+#        f.write("$molecule \n")
+#        f.write("0 1 \n")
+#        for i in range(Natom_mon1):
+#            f.write("%s  %.6f  %.6f %.6f \n" % (XYZ[4*i], XYZmon1[3*i], XYZmon1[3*i+1], XYZmon1[3*i+2]))
+#        for n in range(Natom_mon2):
+#            f.write("%s  %.6f  %.6f  %.6f \n" % (XYZ[(Natom_mon1 + n)*4], mon2test[k][3*n], mon2test[k][3*n+1], mon2test[k][3*n+2]))
+#        f.write("$end \n")
+#        for n in range(len(qchemtemplate)):
+ #           f.write("%s" % qchemtemplate[n])
+ #       f.close()
+
+#def rerunqchem(k,nstep,ppn):
+#    """Runs qchem again to accomidate recentering of data """
+#    for n in range(k,(nstep*2)+4):
+#        qchem = "runqchem.sh"
+#        input = "qcheminput" + str(n)
+#        output = "qchem" + str(n) + ".out"
+#        args = str(ppn) + " " + input + " " + output
+#        print qchem, args
+#        if not isconverged(output):
+#            check_call([qchem,args])
+#        else:
+ #           print "Did not rerun qchem for index", n
+
+
 
 def getenergy(nstep):
     """Gets the total energy from the qchem output file """
@@ -426,13 +457,66 @@ def getenergy(nstep):
         f.close()
     return energy   
 
-### Functions in use for qchem
-if not restart: 
-    qcheminput(nstep,zshift,qchemtemplate)
-    runqchem(nstep,ppn)
 
-energy = []
-energy = getenergy(nstep)
+def runsingleqchem(newR,idx,nstep,zshift,qchemtemplate,ppn):
+    """Runs qchem for a single bondlength value and returns the energy for that value  """
+
+
+    newnstep = ((nstep*2)+1)+idx
+    mon2test = mon2stepshift(newnstep,zshift)
+    f = open("qcheminput" + str(newnstep), "w")
+    comment = "!BondLength = "+str(newR)+" \n"
+    f.write(comment)
+    f.write("$molecule \n")
+    f.write("0 1 \n")
+    for k in range(newnstep,newnstep):
+        for i in range(Natom_mon1):
+             f.write("%s  %.6f  %.6f %.6f \n" % (XYZ[4*i], XYZmon1[3*i], XYZmon1[3*i+1], XYZmon1[3*i+2]))
+        for n in range(Natom_mon2):
+             f.write("%s  %.6f  %.6f  %.6f \n" % (XYZ[(Natom_mon1 + n)*4], mon2test[k][3*n], mon2test[k][3*n+1], mon2test[k][3*n+2]))
+        f.write("$end \n")
+        for n in range(len(qchemtemplate)):
+            f.write("%s" % qchemtemplate[n])
+    f.close()
+
+    qchem = "runqchem.sh" 
+    input = "qcheminput" + str(newnstep)  
+    output = "qchem" + str(newnstep) + ".out"
+    args = str(ppn) + " " + input + " " + output  
+    check_call([qchem,args])   
+
+    newenergy = []
+    f = open("qchem" + str(newnstep) + ".out", "r")
+    for i, line in enumerate(f):
+        if "Total energy in the final basis set =" in line:
+            tmp = line.split()
+            newenergy.append(float(tmp[-1]))
+    f.close()
+    return newenergy
+
+ 
+
+
+
+
+
+
+#def rerungetenergy(k,nstep):
+#    """Gets the total energy from the qchem output file """
+#    energy = []
+#    for n in range(k,(nstep*2)+1):
+ #       f = open("qchem" + str(n) + ".out", "r")
+ #       converged = False
+#        for i, line in enumerate(f):
+#            if "Total energy in the final basis set =" in line:
+#                converged = True
+#                tmp = line.split()
+ #               energy.append(float(tmp[-1]))
+ #       if not converged:
+ #           print "Qchem didn't work for step ", n
+	    #       fgclose()
+  #  return energy
+
 
 ### Get bond distances
 
@@ -444,13 +528,33 @@ def hbondlength(nstep, zshift):
         r.append(abs(mon2[k][((idx2-Natom_mon1)*3)+2]))    
     return r
 
+
+
+bondlength = []
+bondlength = hbondlength(nstep,zshift)
+
+### Functions in use for qchem
+if not restart:
+    qcheminput(nstep,zshift,qchemtemplate,bondlength)
+    runqchem(nstep,ppn)
+energy = []
+energy = getenergy(nstep)
+
+
+
+#def rerunhbondlength(k,nstep, zshift):
+#    """Gets distance between origin and monomer 2's hbonded atom"""
+#    r = []
+#    mon2 = mon2stepshift(nstep,zshift)
+#    for n in range(k,(nstep*2)+1):
+#        r.append(abs(mon2[n][((idx2-Natom_mon1)*3)+2]))
+#    return r
+
 if debug:
     print "Hydrogen bond lengths:"
     print hbondlength(nstep,zshift)
     print "Energy values from qchem"
     print energy
-bondlength = []
-bondlength = hbondlength(nstep,zshift) 
 
 if len(bondlength) != len(energy):
     print "Bond length and energy lists not the same length!"
@@ -458,10 +562,10 @@ if len(bondlength) != len(energy):
     sys.exit(1)
 
 ### plot bond length vs. energy
-#plt.plot(bondlength,energy,)
-#plt.ylabel("Energy")
-#plt.xlabel("Bond Length")
-#plt.show()
+plt.plot(bondlength,energy,)
+plt.ylabel("Energy")
+plt.xlabel("Bond Length")
+plt.show()
 
 ### Calc d33 
 
@@ -487,6 +591,7 @@ def Reqguess(energy,bondlength):
     return energy[index], bondlength[index], index
 
 loweng, Reqguess, Minidx = Reqguess(energy,bondlength)
+
 if debug:
     print "Lowest energy & Req Guess:", loweng, Reqguess
 
@@ -507,25 +612,64 @@ def getdipolemoment(nstep):
         f.close()
     return mu
 
+#def rerungetdipolemoment(k,nstep):
+#    """Gets the dipole moment from the rerun qchem output file """
+#    mu = []
+#    for n in range(k,(nstep*2)+1):
+#        f = open("qchem" + str(n) + ".out", "r")
+#       converged = False
+#       for i, line in enumerate(f):
+#           if "Dipole Moment (Debye)" in line:
+#                converged = True
+#                line = f.next()
+#                tmp = line.split()
+#                mu.append(float(tmp[-1]))
+#        if not converged:
+#            print "Qchem didn't work for step ", n
+#        tep)
+#.close()
+#    return mu
+
 mu = getdipolemoment(nstep)
 
 if debug:
     print "Dipole moment list:"
     print mu
 
-def recenter(MinIdx,bondlength,energy,mu):
-    """recenters Bonglength & Energy lists to be around minimum energy value for better curve fit calc"""
+def enough_points(Minidx,bondlength,energy,mu,nstep,zshift,qchemtemplate,ppn):
+    """Finds out of there are enough points to do a good curve fit of the data"""
     Minbondlength = []
     Minenergy = []
     Minmu = []
     for k in reversed(range(3,-4,-1)):
-        Minbondlength.append(bondlength[MinIdx+k])
-    for k in reversed(range(3,-4,-1)):
-        Minenergy.append(energy[MinIdx+k])
-    for k in reversed(range(3,-4,-1)):
-        Minmu.append(mu[MinIdx+k])
-    return Minenergy, Minbondlength, Minmu
-energy, bondlength, mu = recenter(Minidx,bondlength,energy,mu)
+        try:
+            Minbondlength.append(bondlength[Minidx+k])
+            Minenergy.append(energy[Minidx+k])
+            Minmu.append(mu[Minidx+k])
+        except Exception:
+            return False 
+    return True
+
+enough_points = enough_points(Minidx,bondlength,energy,mu,nstep,zshift,qchemtemplate,ppn)
+print "Enough points?", enough_points 
+
+newenergy = -1
+while not enough_points:
+    idx = 0
+    if breakpoint < 0:
+        idx += 1 
+        newR = bondlength[0] - zshift
+        newenergy = runsingleqchem(newR,idx,nstep,zshift,qchemtemplate,ppn)
+        print "New energy?", newenergy
+ 
+    else:
+        idx += 1 
+        newR = bondlength[-1] + zshift 
+        newenergy = runsingleqchem(newR,idx,nstep,zshift,qchemtemplate,ppn)
+        print "New energy 2?", newenergy
+
+print "New energy 3?", newenergy
+
 
 ### plot bond length vs. energy
 plt.plot(bondlength,energy,)
@@ -563,7 +707,7 @@ def muPrimeFunc(r, coefflist):
 
 def generalpoly6(x, a, b, c, d, e, f, g):
     """ General polynomial of degree 6 """ 
-    return a*x**6 + b*x**5 + c*x**4 + d*x**3 + e*x**2 + f*x + g
+    return a*x**6 + b*x**5 + c*x**4 + d*x**3 + e*x**2 + fx + g
 
 
 
@@ -602,33 +746,18 @@ def find_minimum_newton(fit_function, x0=2.1):
     xmin: the minimum x-value
     ymin: the minimum y-value
     """
-
     derivfit = np.polyder(fit_function, m = 1)
-
     derivfit2 = np.polyder(fit_function, m=2)
-
-
     xCurrent = x0
-
     for i in range(100):
-
         yCurrent = derivfit(xCurrent) #function value
-
         mCurrent = derivfit2(xCurrent) #slope value
-
         xCurrent = xCurrent - yCurrent/mCurrent
-
-
     xmin = xCurrent
-
     ymin = fit_function(xCurrent)
-
     if derivfit(xCurrent) > 1e-11:
-
         print 'did not successfully find minimum'
-
     return xmin, ymin
-
 
 
 def generalpoly4(x, a, b, c, d, e):

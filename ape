@@ -562,10 +562,10 @@ if len(bondlength) != len(energy):
     sys.exit(1)
 
 ### plot bond length vs. energy
-plt.plot(bondlength,energy,)
-plt.ylabel("Energy")
-plt.xlabel("Bond Length")
-plt.show()
+#plt.plot(bondlength,energy,)
+#plt.ylabel("Energy")
+#plt.xlabel("Bond Length")
+#plt.show()
 
 ### Calc d33 
 
@@ -672,10 +672,12 @@ print "New energy 3?", newenergy
 
 
 ### plot bond length vs. energy
-plt.plot(bondlength,energy,)
-plt.ylabel("Energy")
-plt.xlabel("Bond Length")
-plt.show()
+#plt.plot(bondlength,energy,)
+#plt.axvline(x=Req, ymin=0.25, ymax=0.75)
+#plt.plot((Req,Req), (0,), 'b-')
+#plt.ylabel("Energy")
+#plt.xlabel("Bond Length")
+#plt.show()
 
 
 ### Mu prime calc
@@ -809,11 +811,27 @@ if debug:
     print "Mu:", mu
     print "Mu prime:", muprime
 
+
+### plot bond length vs. energy
+plt.plot(bondlength,energy,)
+plt.axvline(x=Req, ymin=0.04, ymax=0.98)
+#plt.plot((Req,Req), (0,), 'b-')
+plt.ylabel("Energy")
+plt.xlabel("Bond Length")
+plt.show()
+
+plt.plot(bondlength,mu)
+plt.xlabel("Bond Length")
+plt.axvline(x=Req, ymin=0.1, ymax=0.98)
+
+plt.ylabel("Mu")
+plt.show()
+
 d33 = (- 1 / Req ) * ( 1 / Edoubleprime) * muprime 
 if debug:
     print "D33 no conversion:", d33
 print "D33 (pC / N):", d33 * (3.33564e-30/4.35974434e-18) / 1.0e-12
 if debug:
     print "Conversion factor, no pico:", (3.33564e-30/4.35974434e-18)
-
+    print "Conversion factor:", (3.33564e-30/4.35974434e-18) / 1.0e-12
 

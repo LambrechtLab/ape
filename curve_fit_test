@@ -7,46 +7,24 @@ import numpy as np
 from scipy.optimize import curve_fit 
 from matplotlib import pyplot as plt  
 import sympy as sp   
-sp.init_printing(use_unicode=True)
+from sympy import init_printing 
 
 
 ## H2O_NH3
 xdata = np.array([1.7169126228728184, 1.7669126228728185, 1.8169126228728185, 1.8669126228728186, 1.9169126228728186, 1.9669126228728184, 2.0169126228728187, 2.0669126228728185, 2.1169126228728183, 2.1669126228728186, 2.2169126228728184])
 ydata = np.array([-132.9681148514, -132.9688351984, -132.9692991666, -132.9695538105, -132.9696395904, -132.9695912912, -132.9694392805, -132.9692076102, -132.9689165472, -132.9685826535, -132.968219362])
 
-#Shifting Energy values - make auto
-
-def find_displacement(ydata):
-    """ Finds the constant displacement value to fit the ydata to curve_fit"""
-    ydata = ydata
-    tmp = 0 
-    shift = [] 
-    for k in range(14):
-        for n in range(len(ydata)):
-            ydata[k][n] = tmp
-            try:
-                 if tmp == tmp:
-                     shift.append(tmp)
-            except:
-                continue 
-    return shift 
-
-
-#print "New Yshift", find_displacement(ydata)
-ydata = (ydata +132.96) * 1000 
-#print "Correct Yshift:", ydaya
-
-
 
 class Data(object):
-    def __init__(self,a, b, m, n, sqr):
+    def __init__(self,a, b, c, m, n, sqr):
         self.coeff1 = a
         self.coeff2 = b
+        self.coeff3 = c
         self.exp1 = m
         self.exp2 = n
         self.error = sqr    
     def __repr__(self):
-        return "Exp1: %s Exp2: %s Coeff1: %s Coeff2: %s Error: %s" % (self.exp1, self.exp2, self.coeff1, self.coeff2, self.error)       
+        return "Exp1: %s Exp2: %s Coeff1: %s Coeff2: %s Shift: %s Error: %s" % (self.exp1, self.exp2, self.coeff1, self.coeff2, self.coeff3, self.error)       
 
 def len_jones_exp():
     """Tries different exponent combinations for Lennard-Jones
@@ -54,53 +32,72 @@ def len_jones_exp():
     sqr = 0 
     sqrs = []
     datasets = []
-    diag = (1./xdata.mean(),1./ydata.mean())
-    for n in range(2,7,2):
-        for m in range (6,13,2):
-            def len_jones(x,a,b):
+#    diag = (1./xdata.mean(),1./ydata.mean())
+    for n in range(2,10,2):
+        for m in range (n+2,15,2):
+            def len_jones(x,a,b,c):
                 """Lennard-Jones expression"""
-                return a * ((-b/x)**m - 2*(-b/x)**n)
-            LJcoeff, LJerr = curve_fit(len_jones, xdata,ydata,p0=diag )
+                return a * ((b/x)**m - 2*(b/x)**n) + c
+            LJcoeff, LJerr = curve_fit(len_jones, xdata,ydata, maxfev = 2000 )
             a = LJcoeff[0]
             b = LJcoeff[1]
-            newydata = len_jones(xdata, a, b)
+            c = LJcoeff[2]
+            newydata = len_jones(xdata, a, b, c)
             for j in range(len(ydata)):
                 diffy = ydata[j] - newydata[j] 
                 sqr += diffy**2 
             sqrs.append(sqr)                 
-            datasets.append(Data(a,b,m,n,sqr))
+            datasets.append(Data(a,b,c,m,n,sqr))
             sqr = 0 
+# Will show all plots
 #            plt.plot(xdata, ydata, 'r', xdata, newydata, 'b')
-#            plt.plot(xdata, ydata, 'r')
+#            title = str(n) + " vs. " + str(m)  
+#            plt.title(title)
 #            plt.show()
     least_error = min(sqrs)
     best_fit = [x for x in datasets if x.error == least_error][0]
-    return best_fit.exp1, best_fit.exp2, best_fit.coeff1, best_fit.coeff2
+    return best_fit.exp1, best_fit.exp2, best_fit.coeff1, best_fit.coeff2, best_fit.coeff3, best_fit.error
+
+def find_minimum(Rm,m,n):
+    """ Finds minimum using first derv of Lennard Jones potential, E'(r)"""
+    Rmin = Rm * (m/2*n)**(1/(m-n)) 
+    return Rmin
 
 def find_secondder_E(Req):
     """ Finds the second derivitive of the Lennard Jones potential"""
-    exp1, exp2, coeff1, coeff2 = len_jones_exp()
+    exp1, exp2, coeff1, coeff2, coeff3, error = len_jones_exp()
     x = sp.symbols("x")
     second_E =  sp.diff( coeff1 * ((coeff2/x )**exp1 - 2*(coeff2/x)**exp2), x, x)
     return second_E.subs(x, Req)
 
-def find_Esndder_eqn(Req):
+def find_Esndder_eqn(Req,coeff1_in, coeff2_in):
     """ Finds the second derivitive of the Lennard Jones potential as an equation"""
-    exp1, exp2, coeff1, coeff2 = len_jones_exp()
+    exp1, exp2, coeff1, coeff2, coeff3, error = len_jones_exp()
     x,coeff1,coeff2 = sp.symbols('r Eps Rm')
     second_E = sp.diff(coeff1*((coeff2/x )**exp1 - 2*(coeff2/x)**exp2), x, x)
-    return second_E    
+    second_E_sub = second_E.subs(x,Req)
+    second_E_sub = second_E_sub.subs(coeff1, coeff1_in)
+    second_E_sub = second_E_sub.subs(coeff2, coeff2_in)
+    return second_E, second_E_sub    
 
 def find_D33(Req, muprime):
     "Finds the D33 based on the Lennard Jones potential approx."""
     secondder_E = find_secondder_E(Req)
-    return (1/Req) * muprime + (1/secondder_E)
+    return (1/Req) * muprime * (1/secondder_E)
 
 if __name__ == "__main__":
-    exp1, exp2, coeff1, coeff2 = len_jones_exp()
+    exp1, exp2, coeff1, coeff2, coeff3, error = len_jones_exp()
+    Rmin = find_minimum(coeff2, exp1, exp2)
     print "Exponents:", exp1, exp2 
-    print "Coefficients","Eps:", coeff1, "Rm:", coeff2     
-    print "E'':", find_secondder_E(1.97800712079)
+    print "Coefficients","Eps:", coeff1, "Rm:", coeff2 
+    print "Minimum:", Rmin 
+    print "Error:", error   
+    print "Shift:", coeff3 
+    print "E'':", find_secondder_E(Rmin)
     print "D33:", find_D33(1.97800712079,-0.71328561603)     
+    Second_E, Second_E_Sub = find_Esndder_eqn(Rmin,coeff1,coeff2)
     print "Equation for E''(Req):"
-    print find_Esndder_eqn 
+    print sp.pretty(Second_E)
+    print "Simplified:" 
+    print sp.simplify(Second_E)
+    print "Eqn for E''(Req) subbed:", Second_E_Sub  

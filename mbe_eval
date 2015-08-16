@@ -90,9 +90,9 @@ def read_qchem(_energy, _time, _fname):
                 _time['Wall(SCF)'] += tmp
             else:
                 _time['Wall(SCF)'] = tmp
-        #if "Grand Totals" in line:
-        #    _time['CPU(MP2)'] = float(line.split()[2])
-        #    _time['Wall(MP2)'] = float(line.split()[4])
+        if "Grand Totals" in line:
+            _time['CPU(MP2)'] = float(line.split()[2])
+            _time['Wall(MP2)'] = float(line.split()[4])
         #if "Total job time" in line:
         #    _time['CPU(Total)'] = float(line.split()[4])
         #    _time['Wall(Total)'] = float(line.split()[3])
@@ -140,7 +140,8 @@ if debug:
 ###########################################
 
 E = {}
-fac = 1./float(max_order)
+T = {}
+fac = 1.#/float(max_order)
 for n in reversed(range(1, max_order+1)):
 
     print "n = ", n
@@ -163,7 +164,16 @@ for n in reversed(range(1, max_order+1)):
             else:
                 E[key] = fac * Energy[name][key]
 
-    fac *= -1.
+        for key in Time[name]:
+            if key in T:
+                T[key] += Time[name][key]
+            else:
+                T[key] = Time[name][key]
+
+    fac *= -1.#/float(n)
 
 for key in E:
     print key, " = ", E[key]
+
+for key in T:
+    print key, " = ", T[key]

@@ -1,0 +1,338 @@
+#!/usr/bin/env python
+
+# Evaluate many body expanded (MBE) energy 
+
+### Imports
+import sys, math
+import numpy as np
+from collections import defaultdict
+from itertools import combinations
+
+usage="  Usage:   mbe_eval  order"
+
+### Exit conditions if input != usage
+if len(sys.argv) != 2:
+    print usage
+    sys.exit(1)
+
+max_order = int(sys.argv[1])
+
+debug = False#True
+
+
+#####################################
+### Read in Interaction List (IL) ###
+#####################################
+
+IL = []
+f = open("IL.txt", "r")
+
+N_monomers = 0
+for line in f:
+    tmp = line.split()
+    tmp[0] = int(tmp[0])
+    tmp[1] = int(tmp[1])
+
+    IL.append(int(tmp[0]))
+    IL.append(int(tmp[1]))
+    IL.append(float(tmp[2]))
+    IL.append(int(tmp[3]))
+    IL.append(int(tmp[4]))
+    IL.append(float(tmp[5]))
+
+    if tmp[0] > N_monomers:
+        N_monomers = int(tmp[0])
+    if tmp[1] > N_monomers:
+        N_monomers = int(tmp[1])
+
+f.close()
+
+print "Read ", N_monomers, " monomers."
+max_order = min(max_order, N_monomers)
+
+# Convert into dictionary
+R = {}
+Q = {}
+for i in range(len(IL)/6):
+    name1 = str(IL[6*i]) + "_" + str(IL[6*i+1])
+    name2 = str(IL[6*i+1]) + "_" + str(IL[6*i])
+    R[name1] = IL[6*i+2]
+    Q[name1] = IL[6*i+5]
+    R[name2] = IL[6*i+2]
+    Q[name2] = IL[6*i+5]
+
+
+####################################################
+### Read in output files and Qchem template file ### 
+####################################################
+
+Monomers = [x for x in range(N_monomers)]
+
+def tuple2name(_tuple):
+    name = ""
+    for i in _tuple:
+        name += str(i+1) + "_"
+    name = name[:-1]
+    return name
+
+def read_qchem(_energy, _time, _fname):
+    f = open(_fname, "r")
+
+    for line in f:
+        if " met" in line:
+            _energy['E(SCF)'] = float(line.split()[1])
+        if " Including correction" in line:
+            _energy['E(SCF2)'] = float(line.split()[1])
+        if " RIMP2   correlation energy" in line:
+            _energy['Ecorr(RIMP2)'] = float(line.split()[5])
+        if " RIMP2         total energy" in line:
+            _energy['Etot(RIMP2)'] = float(line.split()[4])
+
+
+        if "SCF time" in line:
+            tmp = float(line.split()[3])
+            if 'CPU(SCF)' in _time:
+                _time['CPU(SCF)'] += tmp
+            else:
+                _time['CPU(SCF)'] = tmp
+            tmp = float(line.split()[6])
+            if 'Wall(SCF)' in _time:
+                _time['Wall(SCF)'] += tmp
+            else:
+                _time['Wall(SCF)'] = tmp
+        if "Grand Totals" in line:
+            _time['CPU(MP2)'] = float(line.split()[2])
+            _time['Wall(MP2)'] = float(line.split()[4])
+        #if "Total job time" in line:
+        #    _time['CPU(Total)'] = float(line.split()[4])
+        #    _time['Wall(Total)'] = float(line.split()[3])
+
+    f.close()
+
+
+
+############################
+### Read in all energies ###
+############################
+
+
+Energy = {}
+Time = {}
+for n in range(1, max_order+1):
+    #print "n = ", n
+    results = [x for x in combinations(Monomers, n) ]
+    N_comb = len(results)
+
+    tmpE = []
+
+    for comb in results:
+        #print "  comb = ", comb
+        name = tuple2name(comb)
+
+        tmp1 = {}
+        tmp2 = {}
+        read_qchem(tmp1, tmp2, name + ".out")
+
+        Energy[name] = tmp1
+        Time[name] = tmp2
+
+if debug:
+    print "Energies:"
+    print Energy
+
+    print "Timings:"
+    print Time
+
+
+
+###########################################
+### Evaluate requested order of the MBE ###
+###########################################
+
+# E1
+E1 = {}
+fac = 1.
+for i in range(N_monomers):
+    name = str(i+1)
+
+    for key in Energy[name]:
+        if key in E1:
+            E1[key] += fac * Energy[name][key]
+        else:
+            E1[key] = fac * Energy[name][key]
+
+print "*****"
+for key in E1:
+    print "E1[", key, "] = ", E1[key]
+print "*****\n"
+
+if max_order <= 1:
+    sys.exit(0)
+
+# E2
+E2 = {}
+thr_e2 = 1e-4
+N_pairs = N_monomers * (N_monomers - 1) / 2
+N_pairs_sp = 0
+for i in range(N_monomers):
+
+    name_i = str(i+1)
+    #print "i = ", i
+
+
+    for j in sorted(range(i+1, N_monomers), key=lambda x: R[name_i + "_" + str(x+1)]):
+        #print "j = ", j
+        name_j = str(j+1)
+        name_ij = str(i+1) + "_" + str(j+1)
+        N_pairs_sp += 1
+
+        # screening goes here
+        r = R[name_ij]
+        string = ("  %4d  %4d  r = %10.2e:" % (i, j, r))
+
+        skip = False
+        for key in Energy[name]:
+
+            e2 = Energy[name_ij][key] - Energy[name_i][key] - Energy[name_j][key]
+            string += ("  %s = %18.10e" % (key, e2))
+
+            if key in E2:
+                E2[key] += fac * Energy[name][key]
+            else:
+                E2[key] = fac * Energy[name][key]
+
+            if key == "Ecorr(RIMP2)" and abs(e2) < thr_e2:
+                skip = True
+                print "Small contribution. Skipping the remaining monomers."
+
+        print string
+
+        if skip:
+            break
+
+
+print "*****"
+print "N_pairs:   ", N_pairs, " total   ", N_pairs_sp, " sparse"
+for key in E2:
+    #print "E2[", key, "] = ", E2[key]#2.*E2[key]/(N_monomers-1.)
+    print "E2[", key, "] = ", E2[key] * N_pairs/N_pairs_sp
+    #print "Etot[", key, "] = ", E1[key] + E2[key]
+print "*****\n"
+
+
+if max_order <= 2:
+    sys.exit(0)
+
+
+# E3
+E3 = {}
+thr_e3 = 1e-4
+N_trimers = N_monomers * (N_monomers - 1) * (N_monomers - 2)/6
+N_trimers_sp = 0
+for i in range(N_monomers):
+
+    name_i = str(i+1)
+    #print "i = ", i
+
+    dist_sorted_i = sorted(range(i+1, N_monomers), key=lambda x: R[name_i + "_" + str(x+1)])
+
+    for j in dist_sorted_i:
+        #print "j = ", j
+        name_j = str(j+1)
+        name_ij = str(i+1) + "_" + str(j+1)
+        
+        r_ij = R[name_ij]
+
+        dist_sorted_ij = sorted(range(j+1, N_monomers), key=lambda x: min(R[name_i + "_" + str(x+1)], R[name_j + "_" + str(x+1)]))
+
+        Nsig_k = 0
+        for k in dist_sorted_ij:
+
+            #print "j = ", j
+            name_k = str(k+1)
+            name_ik = str(i+1) + "_" + str(k+1)
+            name_jk = str(j+1) + "_" + str(k+1)
+            name_ijk = name_ij + "_" + str(k+1)
+        
+            r_ik = R[name_ik]
+            r_jk = R[name_jk]
+
+            N_trimers_sp += 1
+
+            string = ("  %4d  %4d  %4d  rij = %10.2e  rik = %10.2e  rjk = %10.2e:" % (i, j, k, r_ij, r_ik, r_jk))
+
+            skip = False
+            for key in Energy[name]:
+
+                e3 = Energy[name_ijk][key] - Energy[name_ij][key] - Energy[name_ik][key] - Energy[name_jk][key] + Energy[name_i][key] + Energy[name_j][key] + Energy[name_k][key]
+                string += ("  %s = %18.10e" % (key, e3))
+
+                if key in E3:
+                    E3[key] += fac * Energy[name][key]
+                else:
+                    E3[key] = fac * Energy[name][key]
+
+                if key == "Ecorr(RIMP2)" and abs(e3) < thr_e3:
+                    skip = True
+                    print "Small contribution. Skipping the remaining monomers."
+
+            print string
+
+            if skip:
+                break
+
+            Nsig_k += 1
+
+        if Nsig_k == 0:
+            break
+
+print "*****"
+print "N_pairs:   ", N_trimers, " total   ", N_trimers_sp, " sparse"
+for key in E3:
+    #print "E2[", key, "] = ", E2[key]#2.*E2[key]/(N_monomers-1.)
+    print "E3[", key, "] = ", E3[key] * N_trimers/N_trimers_sp
+    #print "Etot[", key, "] = ", E1[key] + E2[key]
+print "*****\n"
+
+
+if max_order <= 3:
+    sys.exit(0)
+
+E = {}
+T = {}
+fac = 1.#/float(max_order)
+for n in reversed(range(1, max_order+1)):
+
+    print "n = ", n
+    print "  fac = ", fac
+    results = [x for x in combinations(Monomers, n) ]
+    N_comb = len(results)
+
+    for comb in results:
+
+        name = tuple2name(comb)
+        print "  tuple = ", name
+
+        energies = Energy[name]
+        print "    energies = ", energies
+
+        for key in Energy[name]:
+            #print "key = ", key
+            if key in E:
+                E[key] += fac * Energy[name][key]
+            else:
+                E[key] = fac * Energy[name][key]
+
+        for key in Time[name]:
+            if key in T:
+                T[key] += Time[name][key]
+            else:
+                T[key] = Time[name][key]
+
+    fac *= -1.#/float(n)
+
+for key in E:
+    print key, " = ", E[key]
+
+for key in T:
+    print key, " = ", T[key]

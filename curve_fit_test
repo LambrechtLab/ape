@@ -56,11 +56,14 @@ def len_jones_exp():
 #            plt.show()
     least_error = min(sqrs)
     best_fit = [x for x in datasets if x.error == least_error][0]
+# Use to look at specific set
+#    best_fit = datasets[18]
     return best_fit.exp1, best_fit.exp2, best_fit.coeff1, best_fit.coeff2, best_fit.coeff3, best_fit.error
 
 def find_minimum(Rm,m,n):
     """ Finds minimum using first derv of Lennard Jones potential, E'(r)"""
     Rmin = Rm * (m/2*n)**(1/(m-n)) 
+    
     return Rmin
 
 def find_secondder_E(Req):
@@ -75,9 +78,11 @@ def find_Esndder_eqn(Req,coeff1_in, coeff2_in):
     exp1, exp2, coeff1, coeff2, coeff3, error = len_jones_exp()
     x,coeff1,coeff2 = sp.symbols('r Eps Rm')
     second_E = sp.diff(coeff1*((coeff2/x )**exp1 - 2*(coeff2/x)**exp2), x, x)
-    second_E_sub = second_E.subs(x,Req)
-    second_E_sub = second_E_sub.subs(coeff1, coeff1_in)
-    second_E_sub = second_E_sub.subs(coeff2, coeff2_in)
+#sub in expression
+    second_E_sub = sp.simplify(second_E) 
+    second_E_sub = second_E_sub.subs(x, coeff2*(exp1/2*exp2)**(1/(exp1-exp2)))
+#    second_E_sub = second_E_sub.subs(coeff1, coeff1_in)
+#    second_E_sub = second_E_sub.subs(coeff2, coeff2_in)
     return second_E, second_E_sub    
 
 def find_D33(Req, muprime):
@@ -100,4 +105,5 @@ if __name__ == "__main__":
     print sp.pretty(Second_E)
     print "Simplified:" 
     print sp.simplify(Second_E)
-    print "Eqn for E''(Req) subbed:", Second_E_Sub  
+    print "Eqn for E''(Req) subbed:"
+    print Second_E_Sub  

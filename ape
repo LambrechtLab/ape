@@ -667,8 +667,8 @@ while not enough_points:
         newR = bondlength[-1] + zshift 
         newenergy = runsingleqchem(newR,idx,nstep,zshift,qchemtemplate,ppn)
         print "New energy 2?", newenergy
-
-print "New energy 3?", newenergy
+#
+#print "New energy 3?", newenergy
 
 
 ### plot bond length vs. energy
@@ -681,14 +681,14 @@ print "New energy 3?", newenergy
 
 
 ### Mu prime calc
-
+#not used
 def muPrime(Req, bondlength, mu):
     """gets coefficients for mu """
     mucoef = []
     mucoef = np.polyfit(bondlength, mu, 1)
     print mucoef
     return muPrimeFunc(Req,mucoef)
-     
+#not used     
 def muFunc(r,coefflist):
     """mu function """
     value = 0.0
@@ -696,7 +696,7 @@ def muFunc(r,coefflist):
 	value += coefflist[i]* r**(len(coefflist)-i-1)
         print "muFunc Value:", value
     return value
-
+#not used
 def muPrimeFunc(r, coefflist):
     """ mu prime function """
     value = 0.0
@@ -712,7 +712,7 @@ def generalpoly6(x, a, b, c, d, e, f, g):
     return a*x**6 + b*x**5 + c*x**4 + d*x**3 + e*x**2 + fx + g
 
 
-
+# used V
 def energydoubleprime(x, generalpoly6, bondlength, energy):
     """Returns coefficients of the second der of the energy equation """
     energyarray = np.array(energy)
@@ -738,7 +738,7 @@ def energydoubleprime(x, generalpoly6, bondlength, energy):
 #    minimizedfunc = minimize(func, 1,(engcoeffdouble[0], engcoeffdouble[1], engcoeffdouble[2], engcoeffdouble[3], engcoeffdouble[4]))
 #    return minimizedfunc
 
-
+#used V
 def find_minimum_newton(fit_function, x0=2.1):
     """
     Find the minimum of a function via a newton like method
@@ -813,19 +813,19 @@ if debug:
 
 
 ### plot bond length vs. energy
-plt.plot(bondlength,energy,)
-plt.axvline(x=Req, ymin=0.04, ymax=0.98)
+#plt.plot(bondlength,energy,)
+#plt.axvline(x=Req, ymin=0.04, ymax=0.98)
 #plt.plot((Req,Req), (0,), 'b-')
-plt.ylabel("Energy")
-plt.xlabel("Bond Length")
-plt.show()
+#plt.ylabel("Energy")
+#plt.xlabel("Bond Length")
+#plt.show()
 
-plt.plot(bondlength,mu)
-plt.xlabel("Bond Length")
-plt.axvline(x=Req, ymin=0.1, ymax=0.98)
+#plt.plot(bondlength,mu)
+#plt.xlabel("Bond Length")
+#plt.axvline(x=Req, ymin=0.1, ymax=0.98)
 
-plt.ylabel("Mu")
-plt.show()
+#plt.ylabel("Mu")
+#plt.show()
 
 d33 = (- 1 / Req ) * ( 1 / Edoubleprime) * muprime 
 if debug:

@@ -1,0 +1,479 @@
+#!/usr/bin/env python
+### APE version 2
+
+from argparse import ArgumentParser
+from subprocess import check_call
+import numpy as np
+import sys, math 
+
+def getarguments():
+    parser = ArgumentParser(prog="Accelerated Piezo Evaluator (APE)", description="Returns piezo-coefficient (D33) using an XYZ file input.")
+    parser.add_argument("xyzfile", help="Name of the XYZ file to be used. Example.xyz")
+    parser.add_argument("qchem_input", help="Name of the qchem input file to be used to carry out the calculations.")
+#    parser.add_argument("-n","--nstep", default=20, help="Number of shifts used in calculations. Total number of shifts is nstep*2+1. Default = 15", type=int)
+    parser.add_argument("-z","--zshift", default=0.05, help="How large the shifts are in atomic units. Default = 0.05", type=float)
+    parser.add_argument("-r","--restart", help="Reruns APE without doing full qchem calculations using existing qchem output files.",  action="store_true")
+    parser.add_argument("-d","--debug", help="Runs debug mode that gives more information about intermediary calculations in stdout.", action="store_true")
+    parser.add_argument("--ppn", default=1, help="Number of cores to use for calculations", type=int)
+    opts=parser.parse_args()
+    return opts
+
+def get_initial_files(qcheminput,xyzinput):
+    """Reads in qchem template and xyz files."""
+    xyz = []
+    Atoms = [] 
+    f=open(qcheminput, "r")
+    qchemtemplate = f.readlines()
+    f.close()
+    f=open(xyzinput, "r")
+    Natom = int(f.readline())
+    commentline = f.readline()
+    for line in f:
+        tmpline = line.split() 
+        xyz.append(tmpline[0])
+        xyz.append(float(tmpline[1]))
+        xyz.append(float(tmpline[2]))
+        xyz.append(float(tmpline[3]))
+    f.close()
+    return qchemtemplate, Natom, xyz 
+ 
+def sort_xyz_by_adjacency(xyz):
+    """ Uses Q-Chem to sort atoms by adjacency."""
+    f=open("xyzsort", "w")
+    f.write("$molecule \n")
+    f.write("0 1 \n")
+    for i in range(Natom):
+        f.write("%s  %.6f  %.6f %.6f \n" % (xyz[4*i], xyz[4*i+1], xyz[4*i+2], xyz[4*i+3]))
+    f.write("$end \n")
+    f.write("$rem \n")
+    f.write("jobtype sp \n")
+    f.write("exchange hf \n")
+    f.write("basis sto-3g \n")
+    f.write("skip_scfman 1 \n")
+    f.write("bcsr_geometry_reorder 1 \n")
+    f.write("$end \n")
+    f.close()
+
+    qchem = "runqchem.sh"
+    input = "xyzsort"
+    output = "xyzsort.out"
+    args = str(ppn) + "   " + input + "   " + output
+    check_call([qchem,args])
+
+    xyzadjac = []
+    f=open("xyzsort.out", "r")
+    for i, line in enumerate(f):
+        if "Standard Nuclear Orientation (Angstroms)" in line:
+            line = f.next()
+            line = f.next()
+            line = f.next()
+            for i in range(Natom):
+                tmp = line.split()
+                xyzadjac.append(tmp[1])
+                xyzadjac.append(float(tmp[2]))
+                xyzadjac.append(float(tmp[3]))
+                xyzadjac.append(float(tmp[4]))
+                line = f.next()
+    f.close()
+    return xyzadjac 
+
+class Atom(object):
+    def __init__(self,symb,x,y,z):
+        self.s = symb
+        self.x = x 
+        self.y = y
+        self.z = z    
+
+    def __repr__(self):
+        return "\"%s\" (%s, %s, %s)" %(self.s, self.x, self.y, self.z)
+
+    def move_z(self, zshift):
+        self.z 
+        return  
+
+def populate_molecule(xyz):
+    """Populates the molecule object""" 
+    Atoms = [] 
+    for n in range(Natom):
+        n = Atom(xyz[n*4], xyz[4*n+1], xyz[4*n+2], xyz[4*n+3])    
+        Atoms.append(n)
+    return Atoms 
+
+def find_connectivity_matrix(Atoms):
+    """Finds connected atoms based on covalent radaii."""
+    covradaii =  {"H": 0.37, "C": 0.77, "N": 0.75, "O": 0.73, "F":0.71, "P":1.06, "S":1.02, "Cl":0.99, "Se":1.16, "Br":1.14} 
+#    bmatr = np.zeros(shape=(Natom,Natom))
+    covmatr = np.zeros(shape=(Natom, Natom), dtype=np.int)    
+    Hbondpair = []  
+    mintol = .5
+    maxtol = 1.2
+    r_min = 10**12
+    for n in range(Natom):
+        r0 = covradaii[Atoms[n].s]
+        x0 = Atoms[n].x
+        y0 = Atoms[n].y
+        z0 = Atoms[n].z
+        for k in range(Natom):
+            r1 = covradaii[Atoms[k].s]
+            x1 = Atoms[k].x
+            y1 = Atoms[k].y
+            z1 = Atoms[k].z
+            rsqrt = (x0 - x1)**2 + (y0 - y1)**2 + (z0 - z1)**2  
+            r = math.sqrt(rsqrt)
+#            bmatr[(n,k)] = r
+            covrad = r0 + r1
+            if (r >= mintol*covrad and r <= maxtol*covrad) or n == k:
+                covmatr[(n,k)] = 1
+    return covmatr  
+
+def seperate_monomers(Atoms, covmatr):
+    """Seperates atoms into 2 monomers using covmatr.""" 
+# This is confusing 
+    def bondlist(i):
+        bondlist = [] 
+        for k in range(Natom):
+             if covmatr[i,k] == 1:
+                 bondlist.append(k)
+        return bondlist        
+
+    def add_atom(i, in_monomer):
+        if in_monomer[i] == 1:
+            return 
+        in_monomer[i] = 1
+        for j in bondlist(i):
+            add_atom(j, in_monomer)
+
+    def template_dict():
+        return dict([(x,0) for x in range(Natom)])
+        
+    monomers = []
+    for i in range(Natom):
+        temp = template_dict()
+        add_atom(i, temp)
+        
+        if not temp in monomers:
+            monomers.append(temp)
+ 
+    monomer0 = [] 
+    monomer1 = []
+    try:
+        for n, m in monomers[0].items():
+            if m == 1:
+                n = Atoms[n]
+                monomer0.append(n)
+        for n, m in monomers[1].items():
+            if m ==1:
+                n = Atoms[n]
+                monomer1.append(n)
+        return monomer0, monomer1
+    except: 
+        if len(monomers) > 2:
+            print "More then 2 monomers in system; found", len(monomers)
+            sys.exit()
+
+def find_Hbond_pair(monomer0,monomer1):
+    """Finds the H-Bonded atom pair based on minimum bond length. """
+    r_min = 10**12 
+    for n in range(len(monomer0)):
+        x0 = monomer0[n].x
+        y0 = monomer0[n].y
+        z0 = monomer0[n].z 
+        for k in range(len(monomer1)):
+            x1 = monomer1[k].x
+            y1 = monomer1[k].y
+            z1 = monomer1[k].z
+            r = math.sqrt( (x0-x1)**2 + (y0-y1)**2 + (z0-z1)**2)
+            if r < r_min:
+                r_min = r
+                indx1 = n
+                indx2 = k + len(monomer0)
+                Hbond0 = monomer0[n]
+                Hbond1 = monomer1[k]
+    return Hbond0, Hbond1, indx1, indx2 
+
+def make_midpoint_array(Hbond0, Hbond1):
+    """Finds an array for which the origin is at the center of the H-Bond."""
+    mid_x = 0.5 * (Hbond0.x + Hbond1.x)    
+    mid_y = 0.5 * (Hbond0.y + Hbond1.y)
+    mid_z = 0.5 * (Hbond0.z + Hbond1.z)
+    xyz_array = np.empty([Natom,3])
+    for n in range(Natom):
+        xyz_array[n] = np.array([(Atoms[n].x - mid_x), (Atoms[n].y - mid_y), (Atoms[n].z-mid_z)])
+    return xyz_array 
+
+def rotationTranslation(xyzArray, index1, index2):
+        """
+            a function for rotating and translating a molecule so that a given line
+            segment between two atoms lies on the z axix.  Ty Keith!
+        """
+        zVec = np.array([0, 0, 1.0])
+        yVec = np.array([0, 1.0, 0])
+        transVec = xyzArray[index1]
+        xyzArray = xyzArray - transVec
+        vec = xyzArray[index2]
+        vecXy = np.array([vec[0],vec[1], 0.0])
+        vecYz = np.array([0.0 ,np.linalg.norm(vecXy), vec[2]])
+        if np.linalg.norm(vecXy)==0.0:
+            return xyzArray
+        vecYzNorm = vecYz * 1.0/(np.linalg.norm(vecYz))
+        vecXyNorm = vecXy* 1.0/(np.linalg.norm(vecXy))
+        theta1 = np.arccos(np.dot(vecXyNorm, yVec))
+        theta2 = np.arccos(np.dot(vecYzNorm, zVec))
+        cross1 = np.cross(vecXyNorm, yVec)
+        cross2 = np.cross(vecYzNorm, zVec)
+        if cross1[2] < 0:
+                theta1 = 2*np.pi -theta1
+        if cross2[0] < 0:
+                theta2 = 2 *np.pi -theta2
+        rotationMatrix =np.array([[np.cos(theta1), -np.sin(theta1), 0.0],
+        [np.cos(theta2)*np.sin(theta1), np.cos(theta2)* np.cos(theta1), -np.sin(theta2)],
+        [np.sin(theta2)*np.sin(theta1), np.sin(theta2)* np.cos(theta1), np.cos(theta2)]])
+        for i in range(xyzArray.shape[0]):
+                vecCurrent = xyzArray[i]
+                vecNew = np.reshape(np.dot(rotationMatrix, np.reshape(vecCurrent, [3,1])), [3])
+                xyzArray[i] = vecNew
+        return xyzArray
+
+def repopulate_monomers(Atoms, rotation):
+    """Remakes monomer 1 & 2 using rotated coordinates"""
+    rotation_list = rotation.tolist()
+    rotated_atoms = []
+    for n in range(Natom):
+        n  = Atom(Atoms[n].s, rotation_list[n][0], rotation_list[n][1], rotation_list[n][2])
+        rotated_atoms.append(n)
+    mon0, mon1 = seperate_monomers(rotated_atoms, covmatr)
+    return mon0, mon1
+
+def change_z(k, mon1, zshift):
+    """Adds zshift to the z coordinate for monomer 2.  Part of loop k"""
+    mon1_shift = [] 
+    for n in range(len(mon1)):
+        n = Atom(mon1[n].s, mon1[n].x, mon1[n].y, (mon1[n].z + (zshift*k)))
+        mon1_shift.append(n)
+    return mon1_shift
+
+def qchem_input(k,mon0,mon1,qcheminput):
+    """ wip, part of loop k? """
+    f = open("qcheminput" + str(k), "w")
+#    comment = "!BondLength = " + str(bondlength[k]) +" \n"
+#    f.write(comment)
+    f.write("$molecule \n")
+    f.write("0 1 \n")
+    for n in range(len(mon0)):
+             f.write("%s  %.6f  %.6f %.6f \n" % (mon0[n].s, mon0[n].x, mon0[n].y, mon0[n].z))
+    for n in range(len(mon1)):
+           f.write("%s  %.6f  %.6f  %.6f \n" % (mon1[n].s, mon1[n].x, mon1[n].y, mon1[n].z))
+    f.write("$end \n")
+    for n in range(len(qchemtemplate)):
+        f.write("%s" % qchemtemplate[n])
+    f.close()
+
+def run_qchem(k, ppn):
+    """ wip, loop k"""
+    qchem = "runqchem.sh"
+    input = "qcheminput" + str(k)
+    output = "qchem" + str(k) + ".out"
+    args = str(ppn) + " " + input + " " + output
+    if not is_qchem_converged(output):
+        check_call([qchem,args])
+    else:
+        print "Skipping Qchem calculation ", k
+
+def find_energy(k):
+    """ wip, look k"""
+    converged = False
+    energy = [] 
+    f = open("qchem" + str(k) + ".out")
+    for n, line in enumerate(f):
+        if "Total energy in the final basis set =" in line:
+            converged = True
+            temp = line.split()
+            energy.append(float(temp[-1]))
+    if not converged:
+        print "Qchem didn't find energy for step ", k   
+    f.close()
+    return energy
+
+def find_dipolemoment(k):
+    """wip, loop k"""
+    mu = [] 
+    f = open("qchem" + str(k) + ".out", "r")
+    for n, line in enumerate(f):
+        if "Dipole Moment (Debye)" in line:
+            converged = True
+            line = f.next()
+            temp = line.split()
+            mu.append(float(temp[-1]))
+    if not converged:
+        print "Qchem didn't find dipole moment for step", k 
+    f.close()
+    return mu  
+  
+def find_bondlength(shift_mon1,indx1):
+    """ wip, loop k"""
+    return abs(shift_mon1[indx1-len(monomer0)].z)       
+
+def find_minimum_energy(energy, bondlength):
+    """Finds the minimum energy value and its corrisponding bond length. """
+    eng = 1e12
+    indx = 0 
+    for n in range(len(energy)):
+        if energy[n] < eng:
+            eng = energy[n]
+            indx = n
+    return energy[indx], bondlength[indx]
+
+def calc_energy_second_der(bondlength, energy):
+    """Returns coefficients for the second deritive of the energy"""
+    energy_array = np.array(energy)
+    bondlength_array = np.array(bondlength)
+    energy_coeff = np.polyfit(bondlength_array, energy_array, 6)
+    
+    energy_coeff_second = []
+    for n in range(len(energy_coeff) - 2):
+        energy_coeff_second.append(energy_coeff[n]*(len(energy_coeff)-1-n)*(len(energy_coeff)-2-n))
+
+    return energy_coeff, energy_coeff_second
+
+def find_minimum_newton(fit_function, x0=2.1):
+    """
+    Find the minimum of a function via a newton like method
+    fit_function: the function
+    x0: initial guess (should be pretty close)
+    returns:
+    xmin: the minimum x-value
+    ymin: the minimum y-value
+    """
+    derivfit = np.polyder(fit_function, m = 1)
+    derivfit2 = np.polyder(fit_function, m=2)
+    xCurrent = x0
+    for i in range(100):
+        yCurrent = derivfit(xCurrent) #function value
+        mCurrent = derivfit2(xCurrent) #slope value
+        xCurrent = xCurrent - yCurrent/mCurrent
+    xmin = xCurrent
+    ymin = fit_function(xCurrent)
+    if derivfit(xCurrent) > 1e-11:
+        print 'did not successfully find minimum'
+    return xmin, ymin
+
+def general_poly_4(x,a,b,c,d,e):
+    return a*x**4 + b*x**3 + c*x**2 + d*x + e
+
+def is_qchem_converged(filename):
+    """wip"""
+    try:
+        f = open(filename, "r")
+        for line in f:
+            if "Convergence criterion met" in line:
+                return True 
+    except:
+        pass
+    return False
+
+if __name__ == "__main__":
+    args = getarguments()
+    qcheminput = args.qchem_input
+    xyzinput = args.xyzfile
+    ppn = args.ppn
+    debug = args.debug 
+    restart = args.restart
+
+    qchemtemplate, Natom, xyz = get_initial_files(qcheminput,xyzinput)
+    xyz = sort_xyz_by_adjacency(xyz)
+    Atoms = populate_molecule(xyz)
+    covmatr = find_connectivity_matrix(Atoms)
+    monomer0, monomer1 = seperate_monomers(Atoms, covmatr)
+    Hbond0, Hbond1, indx0, indx1 = find_Hbond_pair(monomer0,monomer1)
+    xyz_array = make_midpoint_array(Hbond0, Hbond1)
+    rotation = rotationTranslation(xyz_array, indx0, indx1)
+## All Matched original APE above this point 
+    rmonomer0, rmonomer1 = repopulate_monomers(Atoms,rotation)
+# start cycle here
+# ZSHIFT hardcoded in currently 
+# Need to loop over k loop until good fit achieved
+# add in the restart option
+
+
+
+    energy = []
+    bondlength = []
+    mu = []
+    for k in range(5):
+        shift_mon1 = change_z(k,rmonomer1, 50) 
+#        print shift_mon1
+        qchem_input(k, rmonomer0, shift_mon1 ,qcheminput)
+        run_qchem(k,ppn) 
+        energy.append(find_energy(k)[0])
+        mu.append(find_dipolemoment(k)[0])
+        bondlength.append(find_bondlength(shift_mon1,indx1))
+
+    min_eng, min_bondlength = find_minimum_energy(energy, bondlength)
+    energy_coeff, energy_coeff_second = calc_energy_second_der(bondlength, energy)
+ 
+    fit_coeff = np.polyfit(bondlength, energy, 6)
+    fit_func = np.poly1d(fit_coeff)
+    Req, ymin = find_minimum_newton(fit_func)
+    dervfit = np.polyder(fit_func, m = 2)
+    curvature = dervfit(Req)
+    fit_coeff_mu = np.polyfit(bondlength, mu, 6)
+    fit_func_mu = np.poly1d(fit_coeff_mu)
+    Mudervfit = np.polyder(fit_func_mu)
+    mu_prime = Mudervfit(Req)
+ 
+    eng_second_der = general_poly_4(Req, energy_coeff_second[0],energy_coeff_second[1],energy_coeff_second[2],energy_coeff_second[3],energy_coeff_second[4]) 
+ 
+    d33 = ( - 1 / Req) * (1 / eng_second_der) * mu_prime
+
+    d33_conversion = d33 * (3.33564e-30/4.35974434e-18) / 1.0e-12
+  
+### Display
+    if debug:
+        print "xyz sorted list:"
+        print xyz
+        print "Atoms:"
+        print Atoms
+        print "Bond Matrix:" 
+        print covmatr 
+        print "Monomer 1:"
+        print monomer0
+        print "Monomer 2:"
+        print monomer1 
+        print "H-Bonded pair:"
+        print Hbond0, Hbond1
+        print "H-Bond index:", indx0, indx1 
+        print "XYZ Array:"
+        print xyz_array 
+        print "Rotated array:"
+        print rotation 
+        print "Rotated Monomer 1:"
+        print rmonomer0
+        print "Rotated Monomer 2:"
+        print rmonomer1
+        print "Energy list:"
+        print energy
+        print "Bondlength list:"
+        print bondlength
+        print "Dipole moment list:"
+        print mu
+        print "Lowest Energy:"
+        print min_eng
+        print "Corrosponding Bondlength:" 
+        print min_bondlength
+        print "Energy first der. coefficients:"
+        print energy_coeff
+        print "Energy second der. coefficients:"   
+        print energy_coeff_second
+        print "R eq:"
+        print Req
+        print "Derivitive fit:"
+        print dervfit
+        print "Curvature of fit:"
+        print curvature
+        print "Mu Prime:"
+        print mu_prime
+        print "Second der. of the Energy:"
+        print eng_second_der
+        print "D33 (pC / N):"
+        print d33_conversion
+

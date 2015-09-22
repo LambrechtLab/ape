@@ -1,0 +1,179 @@
+#!/usr/bin/env python
+
+# Evaluate many body expanded (MBE) energy 
+
+### Imports
+import sys, math
+import numpy as np
+from collections import defaultdict
+from itertools import combinations
+
+usage="  Usage:   mbe_eval  order"
+
+### Exit conditions if input != usage
+if len(sys.argv) != 2:
+    print usage
+    sys.exit(1)
+
+max_order = int(sys.argv[1])
+
+debug = True
+
+
+#####################################
+### Read in Interaction List (IL) ###
+#####################################
+
+IL = []
+f = open("IL.txt", "r")
+
+N_monomers = 0
+for line in f:
+    tmp = line.split()
+    tmp[0] = int(tmp[0])
+    tmp[1] = int(tmp[1])
+
+    IL.append(int(tmp[0]))
+    IL.append(int(tmp[1]))
+    IL.append(float(tmp[2]))
+    IL.append(int(tmp[3]))
+    IL.append(int(tmp[4]))
+    IL.append(float(tmp[5]))
+
+    if tmp[0] > N_monomers:
+        N_monomers = int(tmp[0])
+    if tmp[1] > N_monomers:
+        N_monomers = int(tmp[1])
+
+f.close()
+
+print "Read ", N_monomers, " monomers."
+max_order = min(max_order, N_monomers)
+
+
+
+####################################################
+### Read in output files and Qchem template file ### 
+####################################################
+
+Monomers = [x for x in range(N_monomers)]
+
+def tuple2name(_tuple):
+    name = ""
+    for i in _tuple:
+        name += str(i+1) + "_"
+    name = name[:-1]
+    return name
+
+def read_qchem(_energy, _time, _fname):
+    f = open(_fname, "r")
+
+    for line in f:
+        if " met" in line:
+            _energy['E(SCF)'] = float(line.split()[1])
+        if " Including correction" in line:
+            _energy['E(SCF2)'] = float(line.split()[1])
+        if " RIMP2   correlation energy" in line:
+            _energy['Ecorr(RIMP2)'] = float(line.split()[5])
+        if " RIMP2         total energy" in line:
+            _energy['Etot(RIMP2)'] = float(line.split()[4])
+
+
+        if "SCF time" in line:
+            tmp = float(line.split()[3])
+            if 'CPU(SCF)' in _time:
+                _time['CPU(SCF)'] += tmp
+            else:
+                _time['CPU(SCF)'] = tmp
+            tmp = float(line.split()[6])
+            if 'Wall(SCF)' in _time:
+                _time['Wall(SCF)'] += tmp
+            else:
+                _time['Wall(SCF)'] = tmp
+        if "Grand Totals" in line:
+            _time['CPU(MP2)'] = float(line.split()[2])
+            _time['Wall(MP2)'] = float(line.split()[4])
+        #if "Total job time" in line:
+        #    _time['CPU(Total)'] = float(line.split()[4])
+        #    _time['Wall(Total)'] = float(line.split()[3])
+
+    f.close()
+
+
+
+############################
+### Read in all energies ###
+############################
+
+
+Energy = {}
+Time = {}
+for n in range(1, max_order+1):
+    print "n = ", n
+    results = [x for x in combinations(Monomers, n) ]
+    N_comb = len(results)
+
+    tmpE = []
+
+    for comb in results:
+        print "  comb = ", comb
+        name = tuple2name(comb)
+
+        tmp1 = {}
+        tmp2 = {}
+        read_qchem(tmp1, tmp2, name + ".out")
+
+        Energy[name] = tmp1
+        Time[name] = tmp2
+
+if debug:
+    print "Energies:"
+    print Energy
+
+    print "Timings:"
+    print Time
+
+
+
+###########################################
+### Evaluate requested order of the MBE ###
+###########################################
+
+E = {}
+T = {}
+fac = 1.#/float(max_order)
+for n in reversed(range(1, max_order+1)):
+
+    print "n = ", n
+    print "  fac = ", fac
+    results = [x for x in combinations(Monomers, n) ]
+    N_comb = len(results)
+
+    for comb in results:
+
+        name = tuple2name(comb)
+        print "  tuple = ", name
+
+        energies = Energy[name]
+        print "    energies = ", energies
+
+        for key in Energy[name]:
+            #print "key = ", key
+            if key in E:
+                E[key] += fac * Energy[name][key]
+            else:
+                E[key] = fac * Energy[name][key]
+
+        for key in Time[name]:
+            if key in T:
+                T[key] += Time[name][key]
+            else:
+                T[key] = Time[name][key]
+
+    fac *= -1.#/float(n)
+
+for key in E:
+    print key, " = ", E[key]
+
+for key in T:
+    print key, " = ", T[key]

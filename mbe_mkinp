@@ -1,0 +1,308 @@
+#!/usr/bin/env python
+
+# Generates inputs for many-body expansion (MBE)
+
+### Imports
+import sys, math
+import numpy as np
+from collections import defaultdict
+#import copy
+from subprocess import check_call
+from itertools import combinations
+import pickle
+
+usage="  Usage:   mbe_mkinp  xyz-file  qchem_template  maxorder"
+
+### Exit conditions if input != usage
+if len(sys.argv) != 4:
+    print usage
+    sys.exit(1)
+
+fxyz = sys.argv[1]
+fqchem = sys.argv[2]
+max_order = int(sys.argv[3])
+
+debug = True
+
+
+################################################
+### Read in XYZ file and Qchem template file ### 
+################################################
+
+#### List of XYZ coords plus Atom Symbol & Qchem input list 
+
+### Qchem File
+qchemtemplate = []
+f = open(fqchem, "r")
+qchemtemplate = f.readlines()
+f.close()
+
+### XYZ File
+XYZ = [] 
+f = open(fxyz, "r")
+
+Natom = int(f.readline())
+print "Natom = ", Natom
+Comment = f.readline()
+
+for line in f:
+    tmp = line.split()
+    XYZ.append(tmp[0]) # atom symbol
+    XYZ.append(float(tmp[1])) # x
+    XYZ.append(float(tmp[2])) # y
+    XYZ.append(float(tmp[3])) # z
+f.close()
+
+### Reordering XYZ file based on adjacency 
+
+def qchemsort(XYZ):
+    """Generates a Qchem input file for the XYZ list """
+    f = open("qchemsortXYZ", "w")
+    f.write("$molecule \n")
+    f.write("0 1 \n")
+    for i in range(Natom):
+        f.write("%s  %.6f  %.6f %.6f \n" % (XYZ[4*i], XYZ[4*i+1], XYZ[4*i+2], XYZ[4*i+3]))
+    f.write("$end \n")
+    f.write("$rem \n")
+    f.write("jobtype sp \n")
+    f.write("exchange hf \n")
+    f.write("basis sto-3g \n")
+    f.write("skip_scfman 1 \n")
+    f.write("bcsr_geometry_reorder 1 \n")
+    f.write("$end \n")
+    f.close()
+
+def runqchemsort():
+    """Runs qchem on XYZ file to sort by adjacency """
+    qchem = "runqchem.sh"
+    input = "qchemsortXYZ"
+    output = "qchemsortXYZ.out"
+    args = input + " " + output
+    print qchem, args
+    check_call([qchem,args])
+
+def getsortedXYZ():
+    """Gets the sorted XYZ list from the qchem output file """
+    XYZsort = []
+    f = open("qchemsortXYZ.out", "r")
+    for i, line in enumerate(f):
+        if "Standard Nuclear Orientation (Angstroms)" in line:
+            line = f.next()
+            line = f.next()
+            line = f.next()
+            for i in range(Natom):
+                tmp = line.split()
+                XYZsort.append(tmp[1])
+                XYZsort.append(float(tmp[2]))
+                XYZsort.append(float(tmp[3]))
+                XYZsort.append(float(tmp[4]))
+                line = f.next()
+    f.close()
+    return XYZsort
+
+## Running qchem sort
+qchemsort(XYZ)
+runqchemsort()
+XYZ = getsortedXYZ()
+
+
+
+
+### Make bond matrix
+
+idx1 = -1
+idx2 = -1
+hvec = np.array([0,0,0], 'd') # H bond vector/axis 
+bmat = np.zeros(shape=(Natom,Natom)) # Bond matrix 
+covmat = np.zeros(shape=(Natom,Natom),dtype = np.int) #Covalent
+
+### Covalent bond tolerance 
+mintol = .5    
+maxtol = 1.2
+
+### Covalent radii of atoms
+rcovtable = {"H": 0.37, "C": 0.77, "N": 0.75, "O": 0.73}
+
+for i in range(Natom):
+    sym1 = XYZ[4*i]
+   # if sym1 != "H": 
+   #     continue
+	
+    ri = rcovtable[sym1]	
+    x1 = XYZ[4*i+1]
+    y1 = XYZ[4*i+2]
+    z1 = XYZ[4*i+3]
+
+    for j in range(Natom):
+        
+        sym2 = XYZ[4*j]
+        rj = rcovtable[sym2]
+        x2 = XYZ[4*j+1]
+        y2 = XYZ[4*j+2]
+        z2 = XYZ[4*j+3]
+
+        r2 = (x1-x2)**2 + (y1-y2)**2 + (z1-z2)**2
+        r = math.sqrt(r2)
+        bmat[(i,j)] = r
+ 
+
+    # Bond Matrix: 1 = bond, 0 = no bond
+	
+	rcov = ri + rj
+	# print("i = %d, j = %d    r = %.3f  rcov = %.3f" % (i, j, r, rcov))
+	if (r >= mintol * rcov and r <= maxtol * rcov) or i == j: 
+		covmat[(i,j)] = 1
+
+### Printing bondmatrix, covmat
+if debug:
+    print covmat
+
+
+### Making an empty dictionary
+
+def initializeML():
+    """Making an empty dictionary """
+    return dict([(x, 0) for x in range(Natom)])
+
+### Monomer List building functions
+
+def boundto(i):
+    """Finds bonded atoms"""
+    boundtolist = []
+    for k in range(Natom):
+        if covmat[i,k] == 1:
+	    boundtolist.append(k)
+    return boundtolist
+
+def addatom(i, in_monomer):
+	"""Adds atoms to dictionary based on which monomer they're in"""
+	if in_monomer[i] == 1:
+		return
+	in_monomer[i] = 1
+	for j in boundto(i):
+		addatom(j, in_monomer)
+
+### Defining ML = monomer list
+
+ML = []
+for i in range(Natom):
+	tmp = initializeML()
+	addatom(i, tmp)
+	
+	if not tmp in ML:
+		ML.append(tmp)
+
+    
+N_monomers = len(ML)
+print "Number of monomers found: ", N_monomers
+if debug:
+  print "ML:"
+  print ML
+
+if N_monomers <= 1:
+    print "MBE doesn't make sense."
+    sys.exit(1)
+
+max_order = min(max_order, N_monomers)
+
+
+#######################################################################################
+# Generate all possible combinations of monomers necessary for MBE of requested order #
+#######################################################################################
+
+Monomers = []
+for i in range(N_monomers):
+    Monomers.append(i)
+
+print "Monomers: ", Monomers
+
+def addXYZ(_out, _in, _tuple):
+    for i in _tuple:
+        #print "i = ", i
+        for atm in range(Natom):
+            #print "ML[", i, "][", atm, "] = ",  ML[i][atm]
+            if ML[i][atm]:
+                _out.append(_in[4*atm])
+                _out.append(_in[4*atm+1])
+                _out.append(_in[4*atm+2])
+                _out.append(_in[4*atm+3])
+
+def tuple2name(_tuple):
+    name = ""
+    for i in _tuple:
+        name += str(i+1) + "_"
+    name = name[:-1]
+    return name
+
+def write_qchem_input(_name, _xyz, _template):
+    f = open(_name, "w")
+    f.write("$molecule\n")
+    f.write("0 1\n")
+    
+    n = len(_xyz)/4
+
+    for i in range(n):
+        f.write("  %4s   %10.6f   %10.6f   %10.6f\n" % (_xyz[4*i], _xyz[4*i+1], _xyz[4*i+2], _xyz[4*i+3]))
+    f.write("$end\n")
+    f.write("\n")
+    #f.write("$rem\n")
+    for line in _template:
+        f.write(line)
+    #f.write("$end")
+    f.close()
+
+M = []
+for n in range(1, max_order+1):
+    results = [x for x in combinations(Monomers, n) ]
+    N_comb = len(results)
+    print "Order n = ", n, ":  ", N_comb, " combinations"
+    M.append(results)
+
+    for comb in results:
+        print "  comb = ", comb
+
+        tmpXYZ = []
+        addXYZ(tmpXYZ, XYZ, comb)
+
+        if debug:
+            print "Coordinates:"
+            print tmpXYZ
+
+        write_qchem_input(tuple2name(comb) + ".in", tmpXYZ, qchemtemplate)
+
+
+#
+# Gather some statistics in the Interaction List
+#
+
+IL = []
+
+for i in range(N_monomers):
+    for j in range(i):
+
+        r_ij = 1e12
+        i_idx = 0
+        j_idx = 0
+
+        for iatm in range(Natom):
+            if ML[i][iatm]:
+                for jatm in range(Natom):
+                    if ML[j][jatm]:
+                        r2 = (XYZ[4*iatm+1] - XYZ[4*jatm+1])**2 + (XYZ[4*iatm+2] - XYZ[4*jatm+2])**2 + (XYZ[4*iatm+2] - XYZ[4*jatm+2])**2 
+                        if r2 < r_ij:
+                            r_ij = math.sqrt(r2)
+                            i_idx = iatm
+                            j_idx = jatm
+        
+        IL.append(i)
+        IL.append(j)
+        IL.append(r_ij)
+        IL.append(i_idx)
+        IL.append(j_idx)
+        IL.append(.0)
+
+f = open("IL.txt", "w")
+N_pairs = len(IL)/6
+for i in range(N_pairs):
+    f.write("%4d   %4d   %10.6f   %4d   %4d   %20.10e\n" % (IL[6*i]+1, IL[6*i+1]+1, IL[6*i+2], IL[6*i+3]+1, IL[6*i+4]+1, IL[6*i+5]))
+f.close()

@@ -5,6 +5,7 @@ from argparse import ArgumentParser
 from subprocess import check_call
 import numpy as np
 import sys, math 
+import matplotlib.pyplot as plt 
 
 def getarguments():
     parser = ArgumentParser(prog="Accelerated Piezo Evaluator (APE)", description="Returns piezo-coefficient (D33) using an XYZ file input.")
@@ -277,7 +278,9 @@ def run_qchem(k, ppn):
     if not is_qchem_converged(output):
         check_call([qchem,args])
     else:
-        print "Skipping Qchem calculation ", k
+        pass
+#        print "Skipping Qchem calculation ", k
+## This is passing silently!!
 
 def find_energy(k):
     """ wip, look k"""
@@ -321,7 +324,7 @@ def find_minimum_energy(energy, bondlength):
         if energy[n] < eng:
             eng = energy[n]
             indx = n
-    return energy[indx], bondlength[indx]
+    return energy[indx], bondlength[indx], indx
 
 def calc_energy_second_der(bondlength, energy):
     """Returns coefficients for the second deritive of the energy"""
@@ -361,15 +364,80 @@ def general_poly_4(x,a,b,c,d,e):
     return a*x**4 + b*x**3 + c*x**2 + d*x + e
 
 def is_qchem_converged(filename):
-    """wip"""
+    """Checks if the Q-chem calculation has already been performed and skips the calculation if it has been."""
     try:
         f = open(filename, "r")
         for line in f:
             if "Convergence criterion met" in line:
                 return True 
+        f.close()
     except:
         pass
     return False
+
+### Above is generally fine ###
+
+def Qchem_run_loop(rmonomer0,rmonomer1,qcheminput,ppn):
+    """ k loop as fnc :: New: Initial Qchem run structure? """
+    energy = []
+    bondlength = []
+    mu = []
+    start_point = 4
+    for k in range(-start_point,start_point+1):
+        shift_mon1 = change_z(k,rmonomer1,.05) # placeholder Z SHIFT AMOUNT  zshift z_shift
+        qchem_input(k, rmonomer0, shift_mon1 ,qcheminput)
+        run_qchem(k,ppn) 
+        energy.append(find_energy(k)[0])
+        mu.append(find_dipolemoment(k)[0])
+        bondlength.append(find_bondlength(shift_mon1,indx1))
+
+    return energy, bondlength, mu
+
+def count_left(indx):
+    """ """
+    print "Counting left." 
+    counter = 0
+    print counter
+    for n in range(indx,0,-1):
+        counter += 1
+    return counter 
+
+def count_right(indx, bondlength):
+    """ """
+    counter = 0
+    for n in range(indx,len(bondlength)):
+        counter += 1
+    return counter 
+
+def add_left(left_indx,mon1,zshift):
+    """ """
+    k = left_indx-1
+    shift_mon1_left_ = change_z(k,mon1,zshift)
+    return shift_mon1_left_, k
+  
+def add_right(right_indx,mon1,zshift):
+    """ """
+    k = (right_indx+1)
+    shift_mon1_right_ = change_z(k,mon1,zshift)
+    return shift_mon1_right_, k 
+
+
+def Qchem_add(new_monomer,rmonomer0,index,qcheminput,ppn):
+    """ """
+    energy_ = []
+    bondlength_ = []
+    mu_ = []
+    k = index 
+    qchem_input(k, rmonomer0, new_monomer ,qcheminput)
+    run_qchem(k,ppn) 
+
+
+    energy_.append(find_energy(k)[0])
+    mu_.append(find_dipolemoment(k)[0])
+    bondlength_.append(find_bondlength(new_monomer,indx1))
+    return energy_, bondlength_, mu_
+
+
 
 if __name__ == "__main__":
     args = getarguments()
@@ -378,7 +446,6 @@ if __name__ == "__main__":
     ppn = args.ppn
     debug = args.debug 
     restart = args.restart
-
     qchemtemplate, Natom, xyz = get_initial_files(qcheminput,xyzinput)
     xyz = sort_xyz_by_adjacency(xyz)
     Atoms = populate_molecule(xyz)
@@ -389,29 +456,47 @@ if __name__ == "__main__":
     rotation = rotationTranslation(xyz_array, indx0, indx1)
 ## All Matched original APE above this point 
     rmonomer0, rmonomer1 = repopulate_monomers(Atoms,rotation)
-# start cycle here
 # ZSHIFT hardcoded in currently 
-# Need to loop over k loop until good fit achieved
 # add in the restart option
 
+    energy, bondlength, mu = Qchem_run_loop(rmonomer0,rmonomer1,qcheminput,ppn)
+        
+    min_eng, min_bondlength, min_indx = find_minimum_energy(energy, bondlength)
 
+     
+    while count_left(min_indx) < 10 or count_right(min_indx, bondlength) < 10:
+         if count_left(min_indx) < 10:
+             print "Left!" 
+             monomer_left,left_indx = add_left(count_left(min_indx),rmonomer1,0.05) #placholder Z SHIFT AMOUNT zshift z_shift
+             energy, bondlength, mu = Qchem_add(monomer_left,rmonomer0,left_indx,qcheminput,ppn)
+             min_eng, min_bondlength, min_indx = find_minimum_energy(energy,bondlength)
+             break
+         
 
-    energy = []
-    bondlength = []
-    mu = []
-    for k in range(5):
-        shift_mon1 = change_z(k,rmonomer1, 50) 
-#        print shift_mon1
-        qchem_input(k, rmonomer0, shift_mon1 ,qcheminput)
-        run_qchem(k,ppn) 
-        energy.append(find_energy(k)[0])
-        mu.append(find_dipolemoment(k)[0])
-        bondlength.append(find_bondlength(shift_mon1,indx1))
-
-    min_eng, min_bondlength = find_minimum_energy(energy, bondlength)
-    energy_coeff, energy_coeff_second = calc_energy_second_der(bondlength, energy)
+         elif count_right(min_indx, bondlength) < 10:
+             print "Right!"
+             monomer_right,right_indx = add_right(count_right(min_indx,bondlength),rmonomer1,0.05) # placeholder Z SHIFT AMOUNT zshift z_shift
+             energy, bondlength, mu = Qchem_add(monomer_right,rmonomer0,right_indx,qcheminput,ppn)
+             min_eng, min_bondlength, min_indx = find_minimum_energy(energy,bondlength)
+             break
  
-    fit_coeff = np.polyfit(bondlength, energy, 6)
+#        energy, bondlength, mu = Qchem_add(monomer_test)
+
+   
+#    monomer_test = add_left(count_left(min_indx),rmonomer1,0.05) #placholder Z SHIFT AMOUNT zshift z_shift
+ 
+   
+#    print "Monomer Test:" 
+#    print monomer_test 
+# Energy & [bondlength] need to be changes before this step
+
+#        min_eng, min_bondlength, min_indx = find_minimum_energy(energy,bondlength)
+
+
+
+    energy_coeff, energy_coeff_second = calc_energy_second_der(bondlength, energy)
+    fit_coeff,residuals,_,_,_ = np.polyfit(bondlength, energy, 6, full=True)
+
     fit_func = np.poly1d(fit_coeff)
     Req, ymin = find_minimum_newton(fit_func)
     dervfit = np.polyder(fit_func, m = 2)
@@ -424,10 +509,9 @@ if __name__ == "__main__":
     eng_second_der = general_poly_4(Req, energy_coeff_second[0],energy_coeff_second[1],energy_coeff_second[2],energy_coeff_second[3],energy_coeff_second[4]) 
  
     d33 = ( - 1 / Req) * (1 / eng_second_der) * mu_prime
-
     d33_conversion = d33 * (3.33564e-30/4.35974434e-18) / 1.0e-12
   
-### Display
+ ### Display ###
     if debug:
         print "xyz sorted list:"
         print xyz
@@ -472,6 +556,8 @@ if __name__ == "__main__":
         print curvature
         print "Mu Prime:"
         print mu_prime
+        print "Residuals:"
+        print residuals
         print "Second der. of the Energy:"
         print eng_second_der
         print "D33 (pC / N):"

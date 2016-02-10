@@ -324,6 +324,7 @@ def find_minimum_energy(energy, bondlength):
         if energy[n] < eng:
             eng = energy[n]
             indx = n
+    print "Energy:", energy[indx], "Bondlength:", bondlength[indx], "Index", indx 
     return energy[indx], bondlength[indx], indx
 
 def calc_energy_second_der(bondlength, energy):
@@ -383,7 +384,7 @@ def Qchem_run_loop(rmonomer0,rmonomer1,qcheminput,ppn):
     bondlength = []
     mu = []
     start_point = 4
-    for k in range(-start_point,start_point+1):
+    for k in range(0,10):
         shift_mon1 = change_z(k,rmonomer1,.05) # placeholder Z SHIFT AMOUNT  zshift z_shift
         qchem_input(k, rmonomer0, shift_mon1 ,qcheminput)
         run_qchem(k,ppn) 
@@ -395,11 +396,11 @@ def Qchem_run_loop(rmonomer0,rmonomer1,qcheminput,ppn):
 
 def count_left(indx):
     """ """
-    print "Counting left." 
     counter = 0
-    print counter
     for n in range(indx,0,-1):
         counter += 1
+    print "Left Count Called", counter
+    print "Index:", indx
     return counter 
 
 def count_right(indx, bondlength):
@@ -409,10 +410,15 @@ def count_right(indx, bondlength):
         counter += 1
     return counter 
 
-def add_left(left_indx,mon1,zshift):
+def add_left(left_indx,mon1,zshift,bondlength,Hbond0,Hbond1):
     """ """
-    k = left_indx-1
+## Make sure HbonLen is the Original H bond Length
+    HbondLen = Hbond0.z - Hbond1.z
+    print "Hydrogen Bond Length:", HbondLen
+    k = (bondlength[0] - HbondLen) / 0.05 - 1 
+   
     shift_mon1_left_ = change_z(k,mon1,zshift)
+   
     return shift_mon1_left_, k
   
 def add_right(right_indx,mon1,zshift):
@@ -422,20 +428,42 @@ def add_right(right_indx,mon1,zshift):
     return shift_mon1_right_, k 
 
 
-def Qchem_add(new_monomer,rmonomer0,index,qcheminput,ppn):
+def Qchem_add(new_monomer,rmonomer0,index,qcheminput,ppn,energy,bondlength,mu,left,loop_itr):
     """ """
-    energy_ = []
-    bondlength_ = []
-    mu_ = []
-    k = index 
+    if left == True and (bondlength[0]-0.05)>0.05:
+        bondlength.insert(0,(bondlength[0]-0.05))
+        k = -1*loop_itr
+    elif left == False:
+        bondlength.append(bondlength[-1] + 0.05) # ZSHIFT Z_SHIFT z_shift z shift   
+   	k = loop_itr+9
+
+    print "Qchem_add new_monomer:", new_monomer
     qchem_input(k, rmonomer0, new_monomer ,qcheminput)
     run_qchem(k,ppn) 
+    
 
+    energy.append(find_energy(k)[0])
+    mu.append(find_dipolemoment(k)[0])
+#    bondlength.append(find_bondlength(new_monomer,indx1))
+##Add instead of func ^
+#    if left == True and (bondlength[0]-0.05)>0.05:
+#        bondlength.insert(0,(bondlength[0]-0.05))
+#    elif left == False:
+#        bondlength.append(bondlength[-1] + 0.05) # ZSHIFT Z_SHIFT z_shift z shift   
+  
+    print "Qchem_Add Energy pre-sorted", energy
+    print "Bondlength pre-sorted", bondlength
 
-    energy_.append(find_energy(k)[0])
-    mu_.append(find_dipolemoment(k)[0])
-    bondlength_.append(find_bondlength(new_monomer,indx1))
-    return energy_, bondlength_, mu_
+    energy = sorted(energy,key= lambda x: bondlength[energy.index(x)])
+    mu = sorted(mu,key= lambda x: bondlength[mu.index(x)])
+    bondlength = sorted(bondlength)
+
+    print "Qchem_Add"
+    print "k", k
+    print "Energy after sort:", energy 
+    print "Bondlength after sort:", bondlength   
+
+    return energy, bondlength, mu
 
 
 
@@ -463,34 +491,43 @@ if __name__ == "__main__":
         
     min_eng, min_bondlength, min_indx = find_minimum_energy(energy, bondlength)
 
-     
-    while count_left(min_indx) < 10 or count_right(min_indx, bondlength) < 10:
-         if count_left(min_indx) < 10:
-             print "Left!" 
-             monomer_left,left_indx = add_left(count_left(min_indx),rmonomer1,0.05) #placholder Z SHIFT AMOUNT zshift z_shift
-             energy, bondlength, mu = Qchem_add(monomer_left,rmonomer0,left_indx,qcheminput,ppn)
-             min_eng, min_bondlength, min_indx = find_minimum_energy(energy,bondlength)
-             break
-         
 
-         elif count_right(min_indx, bondlength) < 10:
-             print "Right!"
+#    print energy 
+#    while count_left(min_indx) < 10 or count_right(min_indx, bondlength) < 10:
+    loop_itr = 0 
+    high_residuals = True
+    while high_residuals == True:
+         print "Energy:", energy
+         print "Bondlength:", bondlength
+         if count_right(min_indx, bondlength) < 10:
+             loop_itr += 1 
+             left = False
              monomer_right,right_indx = add_right(count_right(min_indx,bondlength),rmonomer1,0.05) # placeholder Z SHIFT AMOUNT zshift z_shift
-             energy, bondlength, mu = Qchem_add(monomer_right,rmonomer0,right_indx,qcheminput,ppn)
+             energy, bondlength, mu = Qchem_add(monomer_right,rmonomer0,right_indx,qcheminput,ppn,energy,bondlength,mu,left,loop_itr)
              min_eng, min_bondlength, min_indx = find_minimum_energy(energy,bondlength)
-             break
- 
-#        energy, bondlength, mu = Qchem_add(monomer_test)
+             energy_coeff, energy_coeff_second = calc_energy_second_der(bondlength, energy)
+             fit_coeff,residuals,_,_,_ = np.polyfit(bondlength, energy, 6, full=True)
+             if residuals < 1e-8:
 
-   
-#    monomer_test = add_left(count_left(min_indx),rmonomer1,0.05) #placholder Z SHIFT AMOUNT zshift z_shift
+                 high_residuals = False
  
-   
-#    print "Monomer Test:" 
-#    print monomer_test 
-# Energy & [bondlength] need to be changes before this step
+         elif count_left(min_indx) < 10 and bondlength[0]>0.5:
+             loop_itr += 1
+             left = True
+             monomer_left,left_indx = add_left(count_left(min_indx),rmonomer1,0.05,bondlength,Hbond0,Hbond1) #placholder Z SHIFT AMOUNT zshift z_shift
+             ## Changing MONOMER2 above  
+             energy, bondlength, mu = Qchem_add(monomer_left,rmonomer0,left_indx,qcheminput,ppn,energy,bondlength,mu,left,loop_itr)
+             ## ^ Changing BONDLENGTHS then doing qchem
 
-#        min_eng, min_bondlength, min_indx = find_minimum_energy(energy,bondlength)
+             min_eng, min_bondlength, min_indx = find_minimum_energy(energy,bondlength)
+             print "While Loop Left min_indx:", min_indx
+             energy_coeff, energy_coeff_second = calc_energy_second_der(bondlength, energy)
+             fit_coeff,residuals,_,_,_ = np.polyfit(bondlength, energy, 6, full=True)
+             if residuals < 1e-8:
+                 high_residuals = False
+
+  	 else:
+	 	break		
 
 
 
